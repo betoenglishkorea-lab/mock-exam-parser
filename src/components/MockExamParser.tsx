@@ -575,20 +575,29 @@ export function MockExamParser() {
               const eventType = line.replace('event:', '').trim();
               console.log('SSE Event:', eventType);
             } else if (line.startsWith('data:')) {
+              const dataStr = line.replace('data:', '').trim();
+              if (!dataStr) continue; // 빈 데이터 무시
+
               try {
-                const data = JSON.parse(line.replace('data:', '').trim());
+                const data = JSON.parse(dataStr);
                 console.log('SSE Data:', data);
 
                 if (data.message) {
-                  // 진행상황 업데이트 (UI에 표시할 수 있음)
                   console.log(`[${item.filename}] ${data.message}`);
                 }
 
+                // 에러 이벤트 처리
                 if (data.success === false || data.error) {
-                  throw new Error(data.message || data.error || '처리 실패');
+                  throw new Error(data.message || data.error || 'API 처리 실패');
                 }
-              } catch (e) {
-                // JSON 파싱 실패는 무시 (빈 라인 등)
+              } catch (parseErr) {
+                // JSON 파싱 실패 시 - 실제 에러인지 확인
+                if (parseErr instanceof SyntaxError) {
+                  console.warn('SSE 데이터 파싱 스킵:', dataStr.substring(0, 100));
+                } else {
+                  // JSON 파싱 에러가 아니면 실제 에러이므로 다시 throw
+                  throw parseErr;
+                }
               }
             }
           }
@@ -597,11 +606,15 @@ export function MockExamParser() {
         fetchQueue();
       } catch (error) {
         console.error(`처리 실패: ${item.filename}`, error);
+        // 에러 메시지 간결하게 처리
+        const errorMsg = error instanceof Error
+          ? error.message
+          : String(error).substring(0, 200);
         await supabase
           .from('pdf_processing_queue')
           .update({
             status: 'failed',
-            error_message: String(error),
+            error_message: errorMsg,
           })
           .eq('id', item.id);
         fetchQueue();
