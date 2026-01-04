@@ -571,11 +571,11 @@ export function MockExamParser() {
           buffer = lines.pop() || '';
 
           for (const line of lines) {
-            if (line.startsWith('event:')) {
-              const eventType = line.replace('event:', '').trim();
+            if (line.startsWith('event: ')) {
+              const eventType = line.substring(7);
               console.log('SSE Event:', eventType);
-            } else if (line.startsWith('data:')) {
-              const dataStr = line.replace('data:', '').trim();
+            } else if (line.startsWith('data: ')) {
+              const dataStr = line.substring(6);
               if (!dataStr) continue; // 빈 데이터 무시
 
               try {
