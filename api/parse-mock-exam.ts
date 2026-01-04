@@ -252,8 +252,10 @@ export default async function handler(req: Request) {
               : `유형 매핑 완료 (예상 문항: ${expectedQuestions}개)`
           });
 
-          // 3. Claude API 호출 (청크별 처리)
+          // 3. Claude API 호출 (청크별 처리 + 즉시 DB 저장)
           let allQuestions: any[] = [];
+          const savedQuestionNumbers = new Set<number>();  // 이미 저장된 문항 번호 추적
+          let totalSavedQuestions = 0;
 
           for (let chunkIdx = 0; chunkIdx < totalChunks; chunkIdx++) {
             const startNum = chunkIdx * CHUNK_SIZE + 1;
@@ -365,11 +367,64 @@ ${pdfText}`;
               continue;
             }
 
-            allQuestions = allQuestions.concat(chunkQuestions);
-            sendEvent('progress', {
-              step: 3,
-              message: `청크 ${chunkIdx + 1}/${totalChunks} 완료 (${chunkQuestions.length}개 추출, 누적 ${allQuestions.length}개)`
+            // 청크별 중복 제거 (이미 저장된 문항 번호 제외)
+            const newQuestions = chunkQuestions.filter((q: any) => {
+              const num = q.question_number;
+              if (savedQuestionNumbers.has(num)) {
+                return false;
+              }
+              return true;
             });
+
+            if (newQuestions.length > 0) {
+              // 청크별 즉시 DB 저장
+              const chunkInsertData = newQuestions.map((q: any, index: number) => {
+                const questionType3 = q.type3 || extractedType3 || '';
+                const mapping = questionType3 ? findTypeMapping(questionType3) : { type1, type2 };
+                return {
+                  type1: mapping.type1 || type1 || q.type1 || '',
+                  type2: mapping.type2 || type2 || q.type2 || '',
+                  type3: questionType3,
+                  source_year: q.source_year || null,
+                  source_month: q.source_month || '',
+                  source_grade: q.source_grade || '',
+                  source_org: q.source_org || '',
+                  source_number: q.source_number || null,
+                  question_number: q.question_number || index + 1,
+                  question_text: q.question_text || '',
+                  passage: q.passage || '',
+                  choice_1: q.choice_1 || '',
+                  choice_2: q.choice_2 || '',
+                  choice_3: q.choice_3 || '',
+                  choice_4: q.choice_4 || '',
+                  choice_5: q.choice_5 || '',
+                  correct_answer: q.correct_answer || '',
+                  model_translation: q.model_translation || '',
+                  pdf_filename: filename || '',
+                };
+              });
+
+              const { error: chunkInsertError } = await supabase
+                .from('mock_exam_questions')
+                .insert(chunkInsertData);
+
+              if (chunkInsertError) {
+                sendEvent('warning', {
+                  message: `청크 ${chunkIdx + 1} DB 저장 실패`,
+                  details: chunkInsertError.message
+                });
+              } else {
+                // 저장된 문항 번호 기록
+                newQuestions.forEach((q: any) => savedQuestionNumbers.add(q.question_number));
+                totalSavedQuestions += newQuestions.length;
+                sendEvent('progress', {
+                  step: 3,
+                  message: `청크 ${chunkIdx + 1}/${totalChunks} 저장 완료 (${newQuestions.length}개, 누적 ${totalSavedQuestions}개)`
+                });
+              }
+            }
+
+            allQuestions = allQuestions.concat(chunkQuestions);
 
             // 청크 사이 딜레이 (API 레이트 리밋 방지)
             if (chunkIdx < totalChunks - 1) {
@@ -377,20 +432,10 @@ ${pdfText}`;
             }
           }
 
-          sendEvent('progress', { step: 4, message: `AI 응답 수신 완료 (총 ${allQuestions.length}개)` });
+          sendEvent('progress', { step: 4, message: `AI 처리 완료 (총 ${totalSavedQuestions}개 저장됨)` });
 
-          // 4. 중복 제거 (question_number 기준)
-          const seenNumbers = new Set<number>();
-          const questions = allQuestions.filter(q => {
-            const num = q.question_number;
-            if (seenNumbers.has(num)) {
-              return false;
-            }
-            seenNumbers.add(num);
-            return true;
-          });
-
-          if (questions.length === 0) {
+          // 4. 저장 결과 확인
+          if (totalSavedQuestions === 0) {
             await supabase
               .from('pdf_processing_queue')
               .update({
@@ -404,60 +449,11 @@ ${pdfText}`;
             return;
           }
 
-          sendEvent('progress', { step: 5, message: `${questions.length}개 문제 파싱 완료 (중복 제거됨)` });
-
-          // 5. DB에 문제 저장
-          // AI가 반환한 type3 우선 사용, 없으면 파일명에서 추출한 값 사용
-          const insertData = questions.map((q: any, index: number) => {
-            const questionType3 = q.type3 || extractedType3 || '';
-            // type3에서 type1, type2 재매핑 (AI가 반환한 type3 기준)
-            const mapping = questionType3 ? findTypeMapping(questionType3) : { type1, type2 };
-            return {
-            type1: mapping.type1 || type1 || q.type1 || '',
-            type2: mapping.type2 || type2 || q.type2 || '',
-            type3: questionType3,
-            source_year: q.source_year || null,
-            source_month: q.source_month || '',
-            source_grade: q.source_grade || '',
-            source_org: q.source_org || '',
-            source_number: q.source_number || null,
-            question_number: q.question_number || index + 1,
-            question_text: q.question_text || '',
-            passage: q.passage || '',
-            choice_1: q.choice_1 || '',
-            choice_2: q.choice_2 || '',
-            choice_3: q.choice_3 || '',
-            choice_4: q.choice_4 || '',
-            choice_5: q.choice_5 || '',
-            correct_answer: q.correct_answer || '',
-            model_translation: q.model_translation || '',
-            pdf_filename: filename || '',
-          };
-          });
-
-          const { error: insertError } = await supabase
-            .from('mock_exam_questions')
-            .insert(insertData);
-
-          if (insertError) {
-            await supabase
-              .from('pdf_processing_queue')
-              .update({
-                status: 'failed',
-                error_message: 'DB 저장 실패: ' + insertError.message,
-              })
-              .eq('id', queueId);
-
-            sendEvent('error', { message: 'DB 저장 실패', details: insertError.message });
-            controller.close();
-            return;
-          }
-
-          sendEvent('progress', { step: 6, message: 'DB 저장 완료' });
+          sendEvent('progress', { step: 5, message: `${totalSavedQuestions}개 문제 DB 저장 완료` });
 
           // 6. 추출 비율 계산 및 경고
           const extractionRatio = expectedQuestions > 0
-            ? Math.round((questions.length / expectedQuestions) * 100)
+            ? Math.round((totalSavedQuestions / expectedQuestions) * 100)
             : 100;
           const isLowExtraction = extractionRatio < 80 && expectedQuestions > 0;
 
@@ -466,14 +462,14 @@ ${pdfText}`;
             .from('pdf_processing_queue')
             .update({
               status: isLowExtraction ? 'warning' : 'completed',
-              total_questions: questions.length,
-              processed_questions: questions.length,
+              total_questions: totalSavedQuestions,
+              processed_questions: totalSavedQuestions,
               expected_questions: expectedQuestions,
               extraction_ratio: extractionRatio,
               progress: 100,
               completed_at: new Date().toISOString(),
               error_message: isLowExtraction
-                ? `추출 비율 낮음: ${questions.length}/${expectedQuestions} (${extractionRatio}%)`
+                ? `추출 비율 낮음: ${totalSavedQuestions}/${expectedQuestions} (${extractionRatio}%)`
                 : null,
             })
             .eq('id', queueId);
@@ -481,11 +477,11 @@ ${pdfText}`;
           // 8. 완료 이벤트 전송
           sendEvent('complete', {
             success: true,
-            questionsCount: questions.length,
+            questionsCount: totalSavedQuestions,
             expectedQuestions,
             extractionRatio,
             warning: isLowExtraction ? `추출 비율 낮음 (${extractionRatio}%)` : null,
-            message: `${questions.length}개 문제 저장 완료`,
+            message: `${totalSavedQuestions}개 문제 저장 완료`,
           });
 
           controller.close();
