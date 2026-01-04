@@ -540,6 +540,17 @@ export function MockExamParser() {
           }),
         });
 
+        // 에러 응답 체크 (SSE가 아닌 JSON 에러 응답인 경우)
+        if (!response.ok) {
+          const contentType = response.headers.get('content-type');
+          if (contentType?.includes('application/json')) {
+            const errorData = await response.json();
+            throw new Error(errorData.error || `HTTP ${response.status}`);
+          } else {
+            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+          }
+        }
+
         // SSE 스트림 읽기
         if (!response.body) {
           throw new Error('응답 스트림이 없습니다.');
