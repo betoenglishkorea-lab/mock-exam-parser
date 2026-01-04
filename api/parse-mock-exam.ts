@@ -240,107 +240,172 @@ export default async function handler(req: Request) {
             expectedQuestions = questionPatterns.length;
           }
 
-          sendEvent('progress', { step: 2, message: `유형 매핑 완료 (예상 문항: ${expectedQuestions}개)` });
+          // 청크 분할 설정: 50문항 이상이면 30문항씩 분할
+          const CHUNK_SIZE = 30;
+          const CHUNK_THRESHOLD = 50;
+          const needsChunking = expectedQuestions >= CHUNK_THRESHOLD;
+          const totalChunks = needsChunking ? Math.ceil(expectedQuestions / CHUNK_SIZE) : 1;
 
-          // 3. Claude API 호출
-          const modeMessage = isAdditionalMode
-            ? `추가 추출 모드 (기존 ${existingQuestionNumbers?.length || 0}문항 제외)`
-            : 'AI 분석 중... (1~2분 소요)';
-          sendEvent('progress', { step: 3, message: modeMessage });
+          sendEvent('progress', {
+            step: 2,
+            message: needsChunking
+              ? `유형 매핑 완료 (예상 ${expectedQuestions}개 → ${totalChunks}개 청크로 분할)`
+              : `유형 매핑 완료 (예상 문항: ${expectedQuestions}개)`
+          });
 
-          // 파일명에서 유형 힌트 생성
-          let userContent = `## 파일명 (유형 힌트)
+          // 3. Claude API 호출 (청크별 처리)
+          let allQuestions: any[] = [];
+
+          for (let chunkIdx = 0; chunkIdx < totalChunks; chunkIdx++) {
+            const startNum = chunkIdx * CHUNK_SIZE + 1;
+            const endNum = Math.min((chunkIdx + 1) * CHUNK_SIZE, expectedQuestions);
+
+            const chunkMessage = needsChunking
+              ? `청크 ${chunkIdx + 1}/${totalChunks} 처리 중 (문항 ${startNum}~${endNum})...`
+              : isAdditionalMode
+                ? `추가 추출 모드 (기존 ${existingQuestionNumbers?.length || 0}문항 제외)`
+                : 'AI 분석 중... (1~2분 소요)';
+            sendEvent('progress', { step: 3, message: chunkMessage });
+
+            // 파일명에서 유형 힌트 생성
+            let userContent = `## 파일명 (유형 힌트)
 ${filename}
 
 ## PDF 텍스트
 ${pdfText}`;
 
-          // 추가 추출 모드: 기존 문항 제외 지시
-          if (isAdditionalMode && existingQuestionNumbers?.length > 0) {
-            userContent += `
+            // 청크 모드: 특정 범위만 추출 지시
+            if (needsChunking) {
+              userContent += `
+
+## 중요: 부분 추출 모드
+이 PDF에는 총 ${expectedQuestions}개의 문항이 있습니다.
+지금은 문항 번호 ${startNum}번부터 ${endNum}번까지만 추출하세요.
+다른 문항은 무시하고, 해당 범위의 문항만 정확하게 추출해주세요.`;
+            }
+
+            // 추가 추출 모드: 기존 문항 제외 지시
+            if (isAdditionalMode && existingQuestionNumbers?.length > 0) {
+              userContent += `
 
 ## 중요: 추가 추출 모드
 다음 문항 번호들은 이미 추출되었습니다. 이 번호들을 제외한 나머지 문항만 추출하세요:
 이미 추출된 문항: ${existingQuestionNumbers.join(', ')}
 
 위 번호들을 제외한 모든 문항을 빠짐없이 추출해주세요.`;
-          }
+            }
 
-          // 스트리밍 모드로 Claude API 호출 (10분 이상 걸릴 수 있어서 필수)
-          const stream = anthropic.messages.stream({
-            model: 'claude-sonnet-4-20250514',
-            max_tokens: 64000,  // Sonnet 4 최대값
-            system: [
-              {
-                type: 'text',
-                text: PARSE_PROMPT,
-                cache_control: { type: 'ephemeral' }
+            // 스트리밍 모드로 Claude API 호출 (10분 이상 걸릴 수 있어서 필수)
+            const apiStream = anthropic.messages.stream({
+              model: 'claude-sonnet-4-20250514',
+              max_tokens: 64000,  // Sonnet 4 최대값
+              system: [
+                {
+                  type: 'text',
+                  text: PARSE_PROMPT,
+                  cache_control: { type: 'ephemeral' }
+                }
+              ],
+              messages: [
+                {
+                  role: 'user',
+                  content: userContent,
+                },
+              ],
+            });
+
+            // 스트리밍 응답 수집 (하트비트로 Vercel 타임아웃 방지)
+            let responseText = '';
+            let lastHeartbeat = Date.now();
+            const HEARTBEAT_INTERVAL = 10000; // 10초마다 하트비트
+
+            for await (const event of apiStream) {
+              if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
+                responseText += event.delta.text;
+
+                // 10초마다 하트비트 전송 (Vercel 타임아웃 방지)
+                const now = Date.now();
+                if (now - lastHeartbeat > HEARTBEAT_INTERVAL) {
+                  sendEvent('heartbeat', {
+                    chunk: chunkIdx + 1,
+                    totalChunks,
+                    chars: responseText.length
+                  });
+                  lastHeartbeat = now;
+                }
               }
-            ],
-            messages: [
-              {
-                role: 'user',
-                content: userContent,
-              },
-            ],
-          });
+            }
 
-          // 스트리밍 응답 수집 (하트비트로 Vercel 타임아웃 방지)
-          let responseText = '';
-          let lastHeartbeat = Date.now();
-          const HEARTBEAT_INTERVAL = 10000; // 10초마다 하트비트
+            // 최종 메시지에서 사용량 정보 가져오기
+            const finalMessage = await apiStream.finalMessage();
+            const usage = finalMessage.usage as any;
+            console.log(`[${filename}] 청크 ${chunkIdx + 1}/${totalChunks} 토큰 사용량:`, {
+              input: usage.input_tokens,
+              output: usage.output_tokens,
+              cache_creation_input_tokens: usage.cache_creation_input_tokens || 0,
+              cache_read_input_tokens: usage.cache_read_input_tokens || 0,
+            });
 
-          for await (const event of stream) {
-            if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
-              responseText += event.delta.text;
+            // 응답 파싱
+            let jsonText = responseText;
+            const jsonMatch = responseText.match(/```(?:json)?\s*([\s\S]*?)```/);
+            if (jsonMatch) {
+              jsonText = jsonMatch[1].trim();
+            }
 
-              // 10초마다 하트비트 전송 (Vercel 타임아웃 방지)
-              const now = Date.now();
-              if (now - lastHeartbeat > HEARTBEAT_INTERVAL) {
-                sendEvent('heartbeat', { chars: responseText.length });
-                lastHeartbeat = now;
-              }
+            let chunkQuestions: any[];
+            try {
+              chunkQuestions = JSON.parse(jsonText);
+            } catch (parseError) {
+              console.error(`청크 ${chunkIdx + 1} JSON 파싱 실패:`, parseError);
+              // 청크 하나 실패해도 계속 진행
+              sendEvent('warning', {
+                message: `청크 ${chunkIdx + 1} 파싱 실패, 계속 진행`,
+                details: responseText.substring(0, 200)
+              });
+              continue;
+            }
+
+            allQuestions = allQuestions.concat(chunkQuestions);
+            sendEvent('progress', {
+              step: 3,
+              message: `청크 ${chunkIdx + 1}/${totalChunks} 완료 (${chunkQuestions.length}개 추출, 누적 ${allQuestions.length}개)`
+            });
+
+            // 청크 사이 딜레이 (API 레이트 리밋 방지)
+            if (chunkIdx < totalChunks - 1) {
+              await new Promise(resolve => setTimeout(resolve, 1000));
             }
           }
 
-          // 최종 메시지에서 사용량 정보 가져오기
-          const finalMessage = await stream.finalMessage();
-          const usage = finalMessage.usage as any;
-          console.log(`[${filename}] 토큰 사용량:`, {
-            input: usage.input_tokens,
-            output: usage.output_tokens,
-            cache_creation_input_tokens: usage.cache_creation_input_tokens || 0,
-            cache_read_input_tokens: usage.cache_read_input_tokens || 0,
+          sendEvent('progress', { step: 4, message: `AI 응답 수신 완료 (총 ${allQuestions.length}개)` });
+
+          // 4. 중복 제거 (question_number 기준)
+          const seenNumbers = new Set<number>();
+          const questions = allQuestions.filter(q => {
+            const num = q.question_number;
+            if (seenNumbers.has(num)) {
+              return false;
+            }
+            seenNumbers.add(num);
+            return true;
           });
 
-          sendEvent('progress', { step: 4, message: 'AI 응답 수신 완료' });
-
-          // 4. 응답 파싱
-
-          let jsonText = responseText;
-          const jsonMatch = responseText.match(/```(?:json)?\s*([\s\S]*?)```/);
-          if (jsonMatch) {
-            jsonText = jsonMatch[1].trim();
-          }
-
-          let questions: any[];
-          try {
-            questions = JSON.parse(jsonText);
-          } catch (parseError) {
+          if (questions.length === 0) {
             await supabase
               .from('pdf_processing_queue')
               .update({
                 status: 'failed',
-                error_message: 'JSON 파싱 실패: ' + String(parseError),
+                error_message: '추출된 문항이 없습니다',
               })
               .eq('id', queueId);
 
-            sendEvent('error', { message: 'JSON 파싱 실패', details: responseText.substring(0, 500) });
+            sendEvent('error', { message: '추출된 문항이 없습니다' });
             controller.close();
             return;
           }
 
-          sendEvent('progress', { step: 5, message: `${questions.length}개 문제 파싱 완료` });
+          sendEvent('progress', { step: 5, message: `${questions.length}개 문제 파싱 완료 (중복 제거됨)` });
 
           // 5. DB에 문제 저장
           // AI가 반환한 type3 우선 사용, 없으면 파일명에서 추출한 값 사용
