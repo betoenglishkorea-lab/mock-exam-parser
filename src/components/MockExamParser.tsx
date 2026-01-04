@@ -790,6 +790,10 @@ export function MockExamParser() {
           })
           .eq('id', item.id);
         fetchQueue();
+        // 실패해도 다음 PDF 처리 계속
+        console.log(`[${item.filename}] 실패 처리 완료, 다음 PDF로 이동...`);
+        await new Promise(resolve => setTimeout(resolve, 3000));
+        continue;
       }
 
       await new Promise(resolve => setTimeout(resolve, 3000));
