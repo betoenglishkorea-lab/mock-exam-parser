@@ -753,23 +753,46 @@ export function MockExamParser() {
           }
         }
 
-        // complete 이벤트 없이 스트림 종료된 경우 경고
+        // complete 이벤트 없이 스트림 종료된 경우 - 서버 처리 완료 대기
         if (!isCompleted) {
-          console.warn(`[${item.filename}] 스트림이 완료 이벤트 없이 종료됨`);
-          // DB에서 현재 상태 확인
-          const { data: currentStatus } = await supabase
+          console.warn(`[${item.filename}] 스트림이 완료 이벤트 없이 종료됨, 서버 처리 완료 대기...`);
+
+          // 서버에서 처리 완료될 때까지 폴링 (최대 5분)
+          const maxWaitTime = 5 * 60 * 1000; // 5분
+          const pollInterval = 5000; // 5초마다 확인
+          const startTime = Date.now();
+
+          while (Date.now() - startTime < maxWaitTime) {
+            await new Promise(resolve => setTimeout(resolve, pollInterval));
+
+            const { data: currentStatus } = await supabase
+              .from('pdf_processing_queue')
+              .select('status')
+              .eq('id', item.id)
+              .single();
+
+            console.log(`[${item.filename}] 폴링 상태: ${currentStatus?.status}`);
+
+            if (currentStatus?.status !== 'processing') {
+              // 처리 완료됨 (completed, failed, warning 등)
+              console.log(`[${item.filename}] 서버 처리 완료: ${currentStatus?.status}`);
+              break;
+            }
+          }
+
+          // 5분 후에도 processing이면 실패 처리
+          const { data: finalStatus } = await supabase
             .from('pdf_processing_queue')
             .select('status')
             .eq('id', item.id)
             .single();
 
-          if (currentStatus?.status === 'processing') {
-            // 아직 processing이면 실패로 표시
+          if (finalStatus?.status === 'processing') {
             await supabase
               .from('pdf_processing_queue')
               .update({
                 status: 'failed',
-                error_message: '스트림이 조기 종료됨 (타임아웃 가능성)',
+                error_message: '처리 시간 초과 (5분)',
               })
               .eq('id', item.id);
           }
