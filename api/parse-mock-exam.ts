@@ -240,10 +240,9 @@ export default async function handler(req: Request) {
             expectedQuestions = questionPatterns.length;
           }
 
-          // 청크 분할 설정: 40문항 이상이면 20문항씩 분할 (장문독해 등 긴 지문 고려)
+          // 청크 분할 설정: 항상 20문항씩 분할 (안정성 확보)
           const CHUNK_SIZE = 20;
-          const CHUNK_THRESHOLD = 40;
-          const needsChunking = expectedQuestions >= CHUNK_THRESHOLD;
+          const needsChunking = expectedQuestions > CHUNK_SIZE;
           const totalChunks = needsChunking ? Math.ceil(expectedQuestions / CHUNK_SIZE) : 1;
 
           sendEvent('progress', {
