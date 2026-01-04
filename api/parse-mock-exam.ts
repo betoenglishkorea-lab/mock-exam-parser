@@ -214,9 +214,16 @@ export default async function handler(req: Request) {
             })
             .eq('id', queueId);
 
-          // 2. type1, type2 매핑
+          // 2. type1, type2 매핑 및 예상 문항 수 추출
           const { type1, type2 } = findTypeMapping(extractedType3 || '');
-          sendEvent('progress', { step: 2, message: '유형 매핑 완료' });
+
+          // PDF 텍스트에서 문제 번호 패턴으로 예상 문항 수 추출
+          // 패턴: "1.", "2.", ... 또는 "1)", "2)" 또는 출처 표시의 마지막 숫자
+          const questionPatterns = pdfText.match(/(?:^|\n)\s*(\d{1,3})\s*[.)]/gm) || [];
+          const sourcePatterns = pdfText.match(/_(\d{1,2})(?:\s|$|\n)/g) || [];
+          const expectedQuestions = Math.max(questionPatterns.length, sourcePatterns.length);
+
+          sendEvent('progress', { step: 2, message: `유형 매핑 완료 (예상 문항: ${expectedQuestions}개)` });
 
           // 3. Claude API 호출
           sendEvent('progress', { step: 3, message: 'AI 분석 중... (1~2분 소요)' });
@@ -230,7 +237,7 @@ ${pdfText}`;
 
           const response = await anthropic.messages.create({
             model: 'claude-sonnet-4-20250514',
-            max_tokens: 20000,
+            max_tokens: 128000,
             system: [
               {
                 type: 'text',
@@ -334,22 +341,36 @@ ${pdfText}`;
 
           sendEvent('progress', { step: 6, message: 'DB 저장 완료' });
 
-          // 6. 큐 상태 업데이트: completed
+          // 6. 추출 비율 계산 및 경고
+          const extractionRatio = expectedQuestions > 0
+            ? Math.round((questions.length / expectedQuestions) * 100)
+            : 100;
+          const isLowExtraction = extractionRatio < 80 && expectedQuestions > 0;
+
+          // 7. 큐 상태 업데이트: completed
           await supabase
             .from('pdf_processing_queue')
             .update({
-              status: 'completed',
+              status: isLowExtraction ? 'warning' : 'completed',
               total_questions: questions.length,
               processed_questions: questions.length,
+              expected_questions: expectedQuestions,
+              extraction_ratio: extractionRatio,
               progress: 100,
               completed_at: new Date().toISOString(),
+              error_message: isLowExtraction
+                ? `추출 비율 낮음: ${questions.length}/${expectedQuestions} (${extractionRatio}%)`
+                : null,
             })
             .eq('id', queueId);
 
-          // 7. 완료 이벤트 전송
+          // 8. 완료 이벤트 전송
           sendEvent('complete', {
             success: true,
             questionsCount: questions.length,
+            expectedQuestions,
+            extractionRatio,
+            warning: isLowExtraction ? `추출 비율 낮음 (${extractionRatio}%)` : null,
             message: `${questions.length}개 문제 저장 완료`,
           });
 

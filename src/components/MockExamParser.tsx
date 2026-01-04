@@ -58,10 +58,12 @@ const deletePdfFromStorage = async (storagePath: string): Promise<void> => {
 interface PdfQueueItem {
   id: string;
   filename: string;
-  status: 'pending' | 'processing' | 'completed' | 'failed';
+  status: 'pending' | 'processing' | 'completed' | 'failed' | 'warning';
   progress: number;
   total_questions: number;
   processed_questions: number;
+  expected_questions?: number;
+  extraction_ratio?: number;
   error_message?: string;
   created_at: string;
   started_at?: string;
@@ -689,6 +691,7 @@ export function MockExamParser() {
       case 'pending': return 'bg-yellow-100 text-yellow-800';
       case 'processing': return 'bg-blue-100 text-blue-800';
       case 'completed': return 'bg-green-100 text-green-800';
+      case 'warning': return 'bg-orange-100 text-orange-800';
       case 'failed': return 'bg-red-100 text-red-800';
       default: return 'bg-gray-100 text-gray-800';
     }
@@ -699,6 +702,7 @@ export function MockExamParser() {
       case 'pending': return '대기중';
       case 'processing': return '처리중';
       case 'completed': return '완료';
+      case 'warning': return '확인필요';
       case 'failed': return '실패';
       default: return status;
     }
@@ -924,8 +928,17 @@ export function MockExamParser() {
                           )}
                         </td>
                         <td className="px-4 py-3 text-sm">
-                          {item.status === 'completed' && (
-                            <span className="text-green-600 font-medium">{item.total_questions}문제</span>
+                          {(item.status === 'completed' || item.status === 'warning') && (
+                            <div>
+                              <span className={`font-medium ${item.status === 'warning' ? 'text-orange-600' : 'text-green-600'}`}>
+                                {item.total_questions}문제
+                              </span>
+                              {item.expected_questions && item.expected_questions > 0 && (
+                                <span className="text-gray-400 text-xs ml-1">
+                                  /{item.expected_questions} ({item.extraction_ratio}%)
+                                </span>
+                              )}
+                            </div>
                           )}
                           {item.status === 'processing' && (
                             <span className="text-blue-600">{item.processed_questions || 0}/{item.total_questions || '?'}</span>
@@ -933,7 +946,7 @@ export function MockExamParser() {
                         </td>
                         <td className="px-4 py-3">
                           <div className="flex gap-2">
-                            {item.status === 'failed' && (
+                            {(item.status === 'failed' || item.status === 'warning') && (
                               <button
                                 onClick={() => retryQueueItem(item.id)}
                                 className="text-blue-600 hover:text-blue-800 text-sm"
