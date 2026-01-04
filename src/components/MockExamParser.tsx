@@ -303,24 +303,29 @@ export function MockExamParser() {
   const extractMetadataFromFilename = (filename: string) => {
     let extractedType3 = '';
 
-    let typeMatch = filename.match(/모음집[_\s]+(\d+\.)?(.+)\.pdf$/i);
-
-    if (!typeMatch || typeMatch[2].match(/^\d+[_\/]/)) {
-      typeMatch = filename.match(/모음집\s*\d+[_\s]+(.+)\.pdf$/i);
-      if (typeMatch) {
-        extractedType3 = typeMatch[1];
-      }
-    } else {
+    // 패턴 1: 모음집_유형.pdf 또는 모음집 숫자_유형.pdf
+    let typeMatch = filename.match(/모음집[_\s]*(\d+)?[_\s]+(.+)\.pdf$/i);
+    if (typeMatch && typeMatch[2]) {
       extractedType3 = typeMatch[2];
     }
 
+    // 패턴 2: 기출_숫자.유형.pdf (예: 기출_11.장문독해.pdf)
     if (!extractedType3) {
-      typeMatch = filename.match(/기출[_\s]+(\d+\.)?(.+)\.pdf$/i);
-      if (typeMatch) {
-        extractedType3 = typeMatch[2];
+      typeMatch = filename.match(/기출[_\s]+\d+\.(.+)\.pdf$/i);
+      if (typeMatch && typeMatch[1]) {
+        extractedType3 = typeMatch[1];
       }
     }
 
+    // 패턴 3: 기출_유형.pdf (숫자 없는 경우)
+    if (!extractedType3) {
+      typeMatch = filename.match(/기출[_\s]+([^_\d][^_]+)\.pdf$/i);
+      if (typeMatch && typeMatch[1]) {
+        extractedType3 = typeMatch[1];
+      }
+    }
+
+    // 후처리: 언더스코어 → 슬래시, 쉼표 → 슬래시, 수정 표시 제거
     if (extractedType3) {
       extractedType3 = extractedType3.replace(/_/g, '/');
       extractedType3 = extractedType3.replace(/,\s*/g, '/');
