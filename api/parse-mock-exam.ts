@@ -4,7 +4,7 @@ import { createClient } from '@supabase/supabase-js';
 // Vercel Edge Function 설정
 export const config = {
   runtime: 'edge',
-  maxDuration: 300, // 5분 타임아웃
+  maxDuration: 300,
 };
 
 // Supabase 클라이언트
@@ -66,12 +66,10 @@ const TYPE_MAPPING: Record<string, { type1: string; type2: string }> = {
 
 // type3에서 type1, type2 찾기
 function findTypeMapping(type3: string): { type1: string; type2: string } {
-  // 직접 매칭
   if (TYPE_MAPPING[type3]) {
     return TYPE_MAPPING[type3];
   }
 
-  // 슬래시로 분리된 복합 유형에서 첫 번째 매칭
   const parts = type3.split('/');
   for (const part of parts) {
     const trimmed = part.trim();
@@ -80,7 +78,6 @@ function findTypeMapping(type3: string): { type1: string; type2: string } {
     }
   }
 
-  // 부분 매칭
   for (const [key, value] of Object.entries(TYPE_MAPPING)) {
     if (type3.includes(key) || key.includes(type3)) {
       return value;
@@ -139,174 +136,218 @@ const PARSE_PROMPT = `당신은 교육청 모의고사 PDF 텍스트를 구조�
 
 export default async function handler(req: Request) {
   // CORS 헤더
-  const headers = {
+  const corsHeaders = {
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Methods': 'POST, OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type',
-    'Content-Type': 'application/json',
   };
 
   // OPTIONS 요청 처리
   if (req.method === 'OPTIONS') {
-    return new Response(null, { status: 204, headers });
+    return new Response(null, { status: 204, headers: corsHeaders });
   }
 
   if (req.method !== 'POST') {
     return new Response(JSON.stringify({ error: 'Method not allowed' }), {
       status: 405,
-      headers,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
   }
 
+  let queueId: string | null = null;
+
   try {
     const body = await req.json();
-    const { queueId, pdfText, filename, extractedType3 } = body;
+    queueId = body.queueId;
+    const { pdfText, filename, extractedType3 } = body;
 
     if (!queueId || !pdfText) {
       return new Response(
         JSON.stringify({ error: 'queueId와 pdfText가 필요합니다' }),
-        { status: 400, headers }
+        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
-    // 큐 상태 업데이트: processing
-    await supabase
-      .from('pdf_processing_queue')
-      .update({
-        status: 'processing',
-        started_at: new Date().toISOString(),
-      })
-      .eq('id', queueId);
+    // SSE 스트리밍 응답 설정
+    const encoder = new TextEncoder();
 
-    // type1, type2 매핑
-    const { type1, type2 } = findTypeMapping(extractedType3 || '');
+    const stream = new ReadableStream({
+      async start(controller) {
+        const sendEvent = (event: string, data: object) => {
+          controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
+        };
 
-    // Claude API 호출 (프롬프트 캐싱 적용)
-    // 시스템 프롬프트를 캐싱하여 반복 호출 시 비용 절감
-    // 캐싱된 프롬프트는 5분간 유지되며, 입력 토큰 비용이 90% 절감됨
-    const response = await anthropic.messages.create({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 20000,
-      system: [
-        {
-          type: 'text',
-          text: PARSE_PROMPT,
-          cache_control: { type: 'ephemeral' }  // 프롬프트 캐싱 활성화
+        try {
+          // 1. 큐 상태 업데이트: processing
+          sendEvent('progress', { step: 1, message: '처리 시작...' });
+
+          await supabase
+            .from('pdf_processing_queue')
+            .update({
+              status: 'processing',
+              started_at: new Date().toISOString(),
+            })
+            .eq('id', queueId);
+
+          // 2. type1, type2 매핑
+          const { type1, type2 } = findTypeMapping(extractedType3 || '');
+          sendEvent('progress', { step: 2, message: '유형 매핑 완료' });
+
+          // 3. Claude API 호출
+          sendEvent('progress', { step: 3, message: 'AI 분석 중... (1~2분 소요)' });
+
+          const response = await anthropic.messages.create({
+            model: 'claude-sonnet-4-20250514',
+            max_tokens: 20000,
+            system: [
+              {
+                type: 'text',
+                text: PARSE_PROMPT,
+                cache_control: { type: 'ephemeral' }
+              }
+            ],
+            messages: [
+              {
+                role: 'user',
+                content: pdfText,
+              },
+            ],
+          });
+
+          // 캐싱 정보 로깅
+          const usage = response.usage as any;
+          console.log(`[${filename}] 토큰 사용량:`, {
+            input: usage.input_tokens,
+            output: usage.output_tokens,
+            cache_creation_input_tokens: usage.cache_creation_input_tokens || 0,
+            cache_read_input_tokens: usage.cache_read_input_tokens || 0,
+          });
+
+          sendEvent('progress', { step: 4, message: 'AI 응답 수신 완료' });
+
+          // 4. 응답 파싱
+          const responseText = response.content[0].type === 'text' ? response.content[0].text : '';
+
+          let jsonText = responseText;
+          const jsonMatch = responseText.match(/```(?:json)?\s*([\s\S]*?)```/);
+          if (jsonMatch) {
+            jsonText = jsonMatch[1].trim();
+          }
+
+          let questions: any[];
+          try {
+            questions = JSON.parse(jsonText);
+          } catch (parseError) {
+            await supabase
+              .from('pdf_processing_queue')
+              .update({
+                status: 'failed',
+                error_message: 'JSON 파싱 실패: ' + String(parseError),
+              })
+              .eq('id', queueId);
+
+            sendEvent('error', { message: 'JSON 파싱 실패', details: responseText.substring(0, 500) });
+            controller.close();
+            return;
+          }
+
+          sendEvent('progress', { step: 5, message: `${questions.length}개 문제 파싱 완료` });
+
+          // 5. DB에 문제 저장
+          const insertData = questions.map((q: any, index: number) => ({
+            type1: type1 || q.type1 || '',
+            type2: type2 || q.type2 || '',
+            type3: extractedType3 || q.type3 || '',
+            source_year: q.source_year || null,
+            source_month: q.source_month || '',
+            source_grade: q.source_grade || '',
+            source_org: q.source_org || '',
+            source_number: q.source_number || null,
+            question_number: q.question_number || index + 1,
+            question_text: q.question_text || '',
+            passage: q.passage || '',
+            choice_1: q.choice_1 || '',
+            choice_2: q.choice_2 || '',
+            choice_3: q.choice_3 || '',
+            choice_4: q.choice_4 || '',
+            choice_5: q.choice_5 || '',
+            correct_answer: q.correct_answer || '',
+            model_translation: q.model_translation || '',
+            pdf_filename: filename || '',
+          }));
+
+          const { error: insertError } = await supabase
+            .from('mock_exam_questions')
+            .insert(insertData);
+
+          if (insertError) {
+            await supabase
+              .from('pdf_processing_queue')
+              .update({
+                status: 'failed',
+                error_message: 'DB 저장 실패: ' + insertError.message,
+              })
+              .eq('id', queueId);
+
+            sendEvent('error', { message: 'DB 저장 실패', details: insertError.message });
+            controller.close();
+            return;
+          }
+
+          sendEvent('progress', { step: 6, message: 'DB 저장 완료' });
+
+          // 6. 큐 상태 업데이트: completed
+          await supabase
+            .from('pdf_processing_queue')
+            .update({
+              status: 'completed',
+              total_questions: questions.length,
+              processed_questions: questions.length,
+              progress: 100,
+              completed_at: new Date().toISOString(),
+            })
+            .eq('id', queueId);
+
+          // 7. 완료 이벤트 전송
+          sendEvent('complete', {
+            success: true,
+            questionsCount: questions.length,
+            message: `${questions.length}개 문제 저장 완료`,
+          });
+
+          controller.close();
+        } catch (error) {
+          console.error('API 오류:', error);
+
+          if (queueId) {
+            await supabase
+              .from('pdf_processing_queue')
+              .update({
+                status: 'failed',
+                error_message: String(error),
+              })
+              .eq('id', queueId);
+          }
+
+          sendEvent('error', { message: '서버 오류', details: String(error) });
+          controller.close();
         }
-      ],
-      messages: [
-        {
-          role: 'user',
-          content: pdfText,  // PDF 텍스트만 유저 메시지로 전송
-        },
-      ],
+      },
     });
 
-    // 캐싱 정보 로깅 (비용 절감 확인용)
-    const usage = response.usage as any;
-    console.log(`[${filename}] 토큰 사용량:`, {
-      input: usage.input_tokens,
-      output: usage.output_tokens,
-      cache_creation_input_tokens: usage.cache_creation_input_tokens || 0,
-      cache_read_input_tokens: usage.cache_read_input_tokens || 0,
+    return new Response(stream, {
+      headers: {
+        ...corsHeaders,
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive',
+      },
     });
-
-    // 응답 파싱
-    const responseText = response.content[0].type === 'text' ? response.content[0].text : '';
-
-    // JSON 추출 (마크다운 코드블록 제거)
-    let jsonText = responseText;
-    const jsonMatch = responseText.match(/```(?:json)?\s*([\s\S]*?)```/);
-    if (jsonMatch) {
-      jsonText = jsonMatch[1].trim();
-    }
-
-    let questions: any[];
-    try {
-      questions = JSON.parse(jsonText);
-    } catch (parseError) {
-      // JSON 파싱 실패 시 에러 처리
-      await supabase
-        .from('pdf_processing_queue')
-        .update({
-          status: 'failed',
-          error_message: 'JSON 파싱 실패: ' + String(parseError),
-        })
-        .eq('id', queueId);
-
-      return new Response(
-        JSON.stringify({ error: 'JSON 파싱 실패', details: responseText.substring(0, 500) }),
-        { status: 500, headers }
-      );
-    }
-
-    // DB에 문제 저장
-    const insertData = questions.map((q: any, index: number) => ({
-      type1: type1 || q.type1 || '',
-      type2: type2 || q.type2 || '',
-      type3: extractedType3 || q.type3 || '',
-      source_year: q.source_year || null,
-      source_month: q.source_month || '',
-      source_grade: q.source_grade || '',
-      source_org: q.source_org || '',
-      source_number: q.source_number || null,
-      question_number: q.question_number || index + 1,
-      question_text: q.question_text || '',
-      passage: q.passage || '',
-      choice_1: q.choice_1 || '',
-      choice_2: q.choice_2 || '',
-      choice_3: q.choice_3 || '',
-      choice_4: q.choice_4 || '',
-      choice_5: q.choice_5 || '',
-      correct_answer: q.correct_answer || '',
-      model_translation: q.model_translation || '',
-      pdf_filename: filename || '',
-    }));
-
-    const { error: insertError } = await supabase
-      .from('mock_exam_questions')
-      .insert(insertData);
-
-    if (insertError) {
-      await supabase
-        .from('pdf_processing_queue')
-        .update({
-          status: 'failed',
-          error_message: 'DB 저장 실패: ' + insertError.message,
-        })
-        .eq('id', queueId);
-
-      return new Response(
-        JSON.stringify({ error: 'DB 저장 실패', details: insertError.message }),
-        { status: 500, headers }
-      );
-    }
-
-    // 큐 상태 업데이트: completed
-    await supabase
-      .from('pdf_processing_queue')
-      .update({
-        status: 'completed',
-        total_questions: questions.length,
-        processed_questions: questions.length,
-        progress: 100,
-        completed_at: new Date().toISOString(),
-      })
-      .eq('id', queueId);
-
-    return new Response(
-      JSON.stringify({
-        success: true,
-        questionsCount: questions.length,
-        message: `${questions.length}개 문제 저장 완료`,
-      }),
-      { status: 200, headers }
-    );
   } catch (error) {
-    console.error('API 오류:', error);
+    console.error('API 초기화 오류:', error);
     return new Response(
       JSON.stringify({ error: '서버 오류', details: String(error) }),
-      { status: 500, headers }
+      { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
   }
 }

@@ -540,22 +540,47 @@ export function MockExamParser() {
           }),
         });
 
-        // 응답 텍스트를 먼저 확인
-        const responseText = await response.text();
-
-        if (!responseText) {
-          throw new Error('API 응답이 비어있습니다. Vercel에 배포된 환경에서 실행해주세요.');
+        // SSE 스트림 읽기
+        if (!response.body) {
+          throw new Error('응답 스트림이 없습니다.');
         }
 
-        let result;
-        try {
-          result = JSON.parse(responseText);
-        } catch {
-          throw new Error(`JSON 파싱 실패: ${responseText.substring(0, 100)}`);
-        }
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
 
-        if (!response.ok) {
-          throw new Error(result.error || '처리 실패');
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+
+          // SSE 이벤트 파싱
+          const lines = buffer.split('\n');
+          buffer = lines.pop() || '';
+
+          for (const line of lines) {
+            if (line.startsWith('event:')) {
+              const eventType = line.replace('event:', '').trim();
+              console.log('SSE Event:', eventType);
+            } else if (line.startsWith('data:')) {
+              try {
+                const data = JSON.parse(line.replace('data:', '').trim());
+                console.log('SSE Data:', data);
+
+                if (data.message) {
+                  // 진행상황 업데이트 (UI에 표시할 수 있음)
+                  console.log(`[${item.filename}] ${data.message}`);
+                }
+
+                if (data.success === false || data.error) {
+                  throw new Error(data.message || data.error || '처리 실패');
+                }
+              } catch (e) {
+                // JSON 파싱 실패는 무시 (빈 라인 등)
+              }
+            }
+          }
         }
 
         fetchQueue();
