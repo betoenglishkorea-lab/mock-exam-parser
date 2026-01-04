@@ -701,6 +701,7 @@ export function MockExamParser() {
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
         let buffer = '';
+        let isCompleted = false;  // complete 이벤트 수신 여부
 
         while (true) {
           const { done, value } = await reader.read();
@@ -712,10 +713,11 @@ export function MockExamParser() {
           const lines = buffer.split('\n');
           buffer = lines.pop() || '';
 
+          let currentEventType = '';
           for (const line of lines) {
             if (line.startsWith('event: ')) {
-              const eventType = line.substring(7);
-              console.log('SSE Event:', eventType);
+              currentEventType = line.substring(7).trim();
+              console.log('SSE Event:', currentEventType);
             } else if (line.startsWith('data: ')) {
               const dataStr = line.substring(6);
               if (!dataStr) continue; // 빈 데이터 무시
@@ -728,8 +730,14 @@ export function MockExamParser() {
                   console.log(`[${item.filename}] ${data.message}`);
                 }
 
+                // complete 이벤트 확인
+                if (currentEventType === 'complete' || data.success === true) {
+                  isCompleted = true;
+                  console.log(`[${item.filename}] 처리 완료!`);
+                }
+
                 // 에러 이벤트 처리
-                if (data.success === false || data.error) {
+                if (currentEventType === 'error' || data.success === false || data.error) {
                   throw new Error(data.message || data.error || 'API 처리 실패');
                 }
               } catch (parseErr) {
@@ -742,6 +750,28 @@ export function MockExamParser() {
                 }
               }
             }
+          }
+        }
+
+        // complete 이벤트 없이 스트림 종료된 경우 경고
+        if (!isCompleted) {
+          console.warn(`[${item.filename}] 스트림이 완료 이벤트 없이 종료됨`);
+          // DB에서 현재 상태 확인
+          const { data: currentStatus } = await supabase
+            .from('pdf_processing_queue')
+            .select('status')
+            .eq('id', item.id)
+            .single();
+
+          if (currentStatus?.status === 'processing') {
+            // 아직 processing이면 실패로 표시
+            await supabase
+              .from('pdf_processing_queue')
+              .update({
+                status: 'failed',
+                error_message: '스트림이 조기 종료됨 (타임아웃 가능성)',
+              })
+              .eq('id', item.id);
           }
         }
 
