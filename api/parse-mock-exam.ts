@@ -222,9 +222,11 @@ export default async function handler(req: Request) {
           const { type1, type2 } = findTypeMapping(extractedType3 || '');
 
           // PDF 정답표에서 총 문항수 추출 (가장 정확한 방법)
-          // 정답표 패턴: "18①", "19②", "105③" 등 (문항번호 + 정답)
+          // 정답표 패턴들:
+          // - "18①", "105③" (번호+정답 붙어있음)
+          // - "18) ③", "105) ①" (번호+괄호+공백+정답)
           // 마지막 페이지에 있는 정답표에서 가장 큰 문항 번호 = 총 문항수
-          const answerPatterns = pdfText.match(/(\d{1,3})\s*[①②③④⑤]/g) || [];
+          const answerPatterns = pdfText.match(/(\d{1,3})\s*\)?\s*[①②③④⑤]/g) || [];
           const questionNumbers = answerPatterns.map(p => {
             const match = p.match(/(\d{1,3})/);
             return match ? parseInt(match[1], 10) : 0;
