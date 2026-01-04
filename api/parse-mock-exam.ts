@@ -102,6 +102,7 @@ const PARSE_PROMPT = `당신은 교육청 모의고사 PDF 텍스트를 구조�
   "source_org": "출제기관 (예: 서울교육청)",
   "source_number": 출제번호 (숫자, 원 시험지 문항번호),
   "question_number": 문제번호 (숫자, 현재 PDF 내 순번),
+  "type3": "문제 유형 (아래 유형 분류표 참고)",
   "question_text": "문제 지시사항/질문 (번호, 각주, 배점 제외)",
   "passage": "문제 지문 (변환 규칙 적용)",
   "choice_1": "① 선지1",
@@ -112,6 +113,30 @@ const PARSE_PROMPT = `당신은 교육청 모의고사 PDF 텍스트를 구조�
   "correct_answer": "정답 (①~⑤)",
   "model_translation": "모범해석 ([해석] + 어휘설명 포함)"
 }
+
+## 문제 유형 분류 (type3)
+파일명에 포함된 유형 힌트를 참고하여 type3를 결정하세요.
+파일명은 별도로 제공됩니다.
+
+유형 목록:
+- 글의 목적
+- 감정/심경/분위기
+- 지칭추론
+- 내용일치/불일치
+- 도표
+- 주제
+- 제목
+- 요지/주장
+- 요약문완성
+- 함의추론
+- 빈칸추론
+- 접속사/연결사
+- 무관한 문장
+- 글의 순서
+- 문장 삽입
+- 장문독해
+- 어법
+- 어휘
 
 ## 출처 표시 파싱 규칙
 - 형식: "2010_3월_고1_서울교육청_29" 또는 유사 형식
@@ -196,6 +221,13 @@ export default async function handler(req: Request) {
           // 3. Claude API 호출
           sendEvent('progress', { step: 3, message: 'AI 분석 중... (1~2분 소요)' });
 
+          // 파일명에서 유형 힌트 생성
+          const userContent = `## 파일명 (유형 힌트)
+${filename}
+
+## PDF 텍스트
+${pdfText}`;
+
           const response = await anthropic.messages.create({
             model: 'claude-sonnet-4-20250514',
             max_tokens: 20000,
@@ -209,7 +241,7 @@ export default async function handler(req: Request) {
             messages: [
               {
                 role: 'user',
-                content: pdfText,
+                content: userContent,
               },
             ],
           });
@@ -254,10 +286,15 @@ export default async function handler(req: Request) {
           sendEvent('progress', { step: 5, message: `${questions.length}개 문제 파싱 완료` });
 
           // 5. DB에 문제 저장
-          const insertData = questions.map((q: any, index: number) => ({
-            type1: type1 || q.type1 || '',
-            type2: type2 || q.type2 || '',
-            type3: extractedType3 || q.type3 || '',
+          // AI가 반환한 type3 우선 사용, 없으면 파일명에서 추출한 값 사용
+          const insertData = questions.map((q: any, index: number) => {
+            const questionType3 = q.type3 || extractedType3 || '';
+            // type3에서 type1, type2 재매핑 (AI가 반환한 type3 기준)
+            const mapping = questionType3 ? findTypeMapping(questionType3) : { type1, type2 };
+            return {
+            type1: mapping.type1 || type1 || q.type1 || '',
+            type2: mapping.type2 || type2 || q.type2 || '',
+            type3: questionType3,
             source_year: q.source_year || null,
             source_month: q.source_month || '',
             source_grade: q.source_grade || '',
@@ -274,7 +311,8 @@ export default async function handler(req: Request) {
             correct_answer: q.correct_answer || '',
             model_translation: q.model_translation || '',
             pdf_filename: filename || '',
-          }));
+          };
+          });
 
           const { error: insertError } = await supabase
             .from('mock_exam_questions')
