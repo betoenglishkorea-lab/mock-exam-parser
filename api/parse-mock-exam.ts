@@ -184,7 +184,9 @@ export default async function handler(req: Request) {
   try {
     const body = await req.json();
     queueId = body.queueId;
-    const { pdfText, filename, extractedType3 } = body;
+    const { pdfText, filename, extractedType3, mode, existingQuestionNumbers } = body;
+    // mode: 'full' (기본값) | 'additional' (추가 추출)
+    // existingQuestionNumbers: 이미 추출된 문항 번호 배열 (추가 추출 모드에서 사용)
 
     if (!queueId || !pdfText) {
       return new Response(
@@ -192,6 +194,8 @@ export default async function handler(req: Request) {
         { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
+
+    const isAdditionalMode = mode === 'additional';
 
     // SSE 스트리밍 응답 설정
     const encoder = new TextEncoder();
@@ -217,23 +221,48 @@ export default async function handler(req: Request) {
           // 2. type1, type2 매핑 및 예상 문항 수 추출
           const { type1, type2 } = findTypeMapping(extractedType3 || '');
 
-          // PDF 텍스트에서 문제 번호 패턴으로 예상 문항 수 추출
-          // 패턴: "1.", "2.", ... 또는 "1)", "2)" 또는 출처 표시의 마지막 숫자
-          const questionPatterns = pdfText.match(/(?:^|\n)\s*(\d{1,3})\s*[.)]/gm) || [];
-          const sourcePatterns = pdfText.match(/_(\d{1,2})(?:\s|$|\n)/g) || [];
-          const expectedQuestions = Math.max(questionPatterns.length, sourcePatterns.length);
+          // PDF 정답표에서 총 문항수 추출 (가장 정확한 방법)
+          // 정답표 패턴: "18①", "19②", "105③" 등 (문항번호 + 정답)
+          // 마지막 페이지에 있는 정답표에서 가장 큰 문항 번호 = 총 문항수
+          const answerPatterns = pdfText.match(/(\d{1,3})\s*[①②③④⑤]/g) || [];
+          const questionNumbers = answerPatterns.map(p => {
+            const match = p.match(/(\d{1,3})/);
+            return match ? parseInt(match[1], 10) : 0;
+          });
+          const maxQuestionNumber = questionNumbers.length > 0 ? Math.max(...questionNumbers) : 0;
+
+          // fallback: 정답표가 없으면 기존 방식 사용
+          let expectedQuestions = maxQuestionNumber;
+          if (expectedQuestions === 0) {
+            const questionPatterns = pdfText.match(/(?:^|\n)\s*(\d{1,3})\s*[.)]/gm) || [];
+            expectedQuestions = questionPatterns.length;
+          }
 
           sendEvent('progress', { step: 2, message: `유형 매핑 완료 (예상 문항: ${expectedQuestions}개)` });
 
           // 3. Claude API 호출
-          sendEvent('progress', { step: 3, message: 'AI 분석 중... (1~2분 소요)' });
+          const modeMessage = isAdditionalMode
+            ? `추가 추출 모드 (기존 ${existingQuestionNumbers?.length || 0}문항 제외)`
+            : 'AI 분석 중... (1~2분 소요)';
+          sendEvent('progress', { step: 3, message: modeMessage });
 
           // 파일명에서 유형 힌트 생성
-          const userContent = `## 파일명 (유형 힌트)
+          let userContent = `## 파일명 (유형 힌트)
 ${filename}
 
 ## PDF 텍스트
 ${pdfText}`;
+
+          // 추가 추출 모드: 기존 문항 제외 지시
+          if (isAdditionalMode && existingQuestionNumbers?.length > 0) {
+            userContent += `
+
+## 중요: 추가 추출 모드
+다음 문항 번호들은 이미 추출되었습니다. 이 번호들을 제외한 나머지 문항만 추출하세요:
+이미 추출된 문항: ${existingQuestionNumbers.join(', ')}
+
+위 번호들을 제외한 모든 문항을 빠짐없이 추출해주세요.`;
+          }
 
           const response = await anthropic.messages.create({
             model: 'claude-sonnet-4-20250514',

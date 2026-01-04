@@ -471,6 +471,141 @@ export function MockExamParser() {
     fetchQueue();
   };
 
+  // 추가 추출 (누락된 문항 추출)
+  const additionalExtract = async (item: PdfQueueItem) => {
+    if (processing) {
+      alert('다른 처리가 진행 중입니다.');
+      return;
+    }
+
+    if (!item.storage_path) {
+      alert('Storage 경로가 없습니다.');
+      return;
+    }
+
+    // 이미 추출된 문항 번호 조회
+    const { data: existingQuestions } = await supabase
+      .from('mock_exam_questions')
+      .select('question_number')
+      .eq('pdf_filename', item.filename);
+
+    const existingNumbers = existingQuestions?.map(q => q.question_number) || [];
+
+    if (existingNumbers.length === 0) {
+      alert('기존 추출된 문항이 없습니다. 일반 처리를 사용하세요.');
+      return;
+    }
+
+    if (!confirm(`기존 ${existingNumbers.length}개 문항을 제외하고 추가 추출을 시작합니다.\n계속하시겠습니까?`)) {
+      return;
+    }
+
+    setProcessing(true);
+
+    try {
+      // Storage에서 PDF 다운로드
+      const arrayBuffer = await getPdfFromStorage(item.storage_path);
+      if (!arrayBuffer) {
+        throw new Error('Storage에서 파일을 찾을 수 없습니다.');
+      }
+
+      // PDF 텍스트 추출
+      const pdfText = await extractTextFromArrayBuffer(arrayBuffer);
+
+      // 상태 업데이트
+      await supabase
+        .from('pdf_processing_queue')
+        .update({
+          status: 'processing',
+          started_at: new Date().toISOString(),
+          error_message: null,
+        })
+        .eq('id', item.id);
+      fetchQueue();
+
+      // API 호출 (추가 추출 모드)
+      const response = await fetch('/api/parse-mock-exam', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          queueId: item.id,
+          pdfText,
+          filename: item.filename,
+          extractedType3: item.extracted_type3,
+          mode: 'additional',
+          existingQuestionNumbers: existingNumbers,
+        }),
+      });
+
+      if (!response.ok) {
+        const contentType = response.headers.get('content-type');
+        if (contentType?.includes('application/json')) {
+          const errorData = await response.json();
+          throw new Error(errorData.error || `HTTP ${response.status}`);
+        } else {
+          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+      }
+
+      // SSE 스트림 읽기
+      if (!response.body) {
+        throw new Error('응답 스트림이 없습니다.');
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          if (line.startsWith('event: ')) {
+            console.log('SSE Event:', line.substring(7));
+          } else if (line.startsWith('data: ')) {
+            const dataStr = line.substring(6);
+            if (!dataStr) continue;
+
+            try {
+              const data = JSON.parse(dataStr);
+              console.log('SSE Data:', data);
+
+              if (data.success === false || data.error) {
+                throw new Error(data.message || data.error || 'API 처리 실패');
+              }
+            } catch (parseErr) {
+              if (!(parseErr instanceof SyntaxError)) {
+                throw parseErr;
+              }
+            }
+          }
+        }
+      }
+
+      fetchQueue();
+      alert('추가 추출이 완료되었습니다.');
+    } catch (error) {
+      console.error('추가 추출 실패:', error);
+      const errorMsg = error instanceof Error ? error.message : String(error).substring(0, 200);
+      await supabase
+        .from('pdf_processing_queue')
+        .update({
+          status: 'warning',
+          error_message: `추가 추출 실패: ${errorMsg}`,
+        })
+        .eq('id', item.id);
+      fetchQueue();
+      alert(`추가 추출 실패: ${errorMsg}`);
+    } finally {
+      setProcessing(false);
+    }
+  };
+
   // ArrayBuffer에서 PDF 텍스트 추출
   const extractTextFromArrayBuffer = async (arrayBuffer: ArrayBuffer): Promise<string> => {
     const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
@@ -950,8 +1085,18 @@ export function MockExamParser() {
                               <button
                                 onClick={() => retryQueueItem(item.id)}
                                 className="text-blue-600 hover:text-blue-800 text-sm"
+                                disabled={processing}
                               >
                                 재시도
+                              </button>
+                            )}
+                            {item.status === 'warning' && (
+                              <button
+                                onClick={() => additionalExtract(item)}
+                                className="text-orange-600 hover:text-orange-800 text-sm"
+                                disabled={processing}
+                              >
+                                추가추출
                               </button>
                             )}
                             <button
