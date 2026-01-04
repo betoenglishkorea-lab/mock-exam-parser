@@ -757,8 +757,8 @@ export function MockExamParser() {
         if (!isCompleted) {
           console.warn(`[${item.filename}] 스트림이 완료 이벤트 없이 종료됨, 서버 처리 완료 대기...`);
 
-          // 서버에서 처리 완료될 때까지 폴링 (최대 10분 - Vercel Pro 300초 기준)
-          const maxWaitTime = 10 * 60 * 1000; // 10분
+          // 서버에서 처리 완료될 때까지 폴링 (최대 15분 - 청크당 3분 x 5청크 기준)
+          const maxWaitTime = 15 * 60 * 1000; // 15분
           const pollInterval = 5000; // 5초마다 확인
           const startTime = Date.now();
 
@@ -792,7 +792,7 @@ export function MockExamParser() {
               .from('pdf_processing_queue')
               .update({
                 status: 'failed',
-                error_message: '처리 시간 초과 (10분)',
+                error_message: '처리 시간 초과 (15분)',
               })
               .eq('id', item.id);
           }
