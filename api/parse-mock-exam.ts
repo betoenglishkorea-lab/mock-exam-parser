@@ -240,8 +240,8 @@ export default async function handler(req: Request) {
             expectedQuestions = questionPatterns.length;
           }
 
-          // 청크 분할 설정: 항상 20문항씩 분할 (안정성 확보)
-          const CHUNK_SIZE = 20;
+          // 청크 분할 설정: 10문항씩 분할 (Vercel 무료 30초 타임아웃 대응)
+          const CHUNK_SIZE = 10;
           const needsChunking = expectedQuestions > CHUNK_SIZE;
           const totalChunks = needsChunking ? Math.ceil(expectedQuestions / CHUNK_SIZE) : 1;
 
