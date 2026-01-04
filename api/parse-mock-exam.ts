@@ -264,7 +264,8 @@ ${pdfText}`;
 위 번호들을 제외한 모든 문항을 빠짐없이 추출해주세요.`;
           }
 
-          const response = await anthropic.messages.create({
+          // 스트리밍 모드로 Claude API 호출 (10분 이상 걸릴 수 있어서 필수)
+          const stream = anthropic.messages.stream({
             model: 'claude-sonnet-4-20250514',
             max_tokens: 128000,
             system: [
@@ -282,8 +283,17 @@ ${pdfText}`;
             ],
           });
 
-          // 캐싱 정보 로깅
-          const usage = response.usage as any;
+          // 스트리밍 응답 수집
+          let responseText = '';
+          for await (const event of stream) {
+            if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
+              responseText += event.delta.text;
+            }
+          }
+
+          // 최종 메시지에서 사용량 정보 가져오기
+          const finalMessage = await stream.finalMessage();
+          const usage = finalMessage.usage as any;
           console.log(`[${filename}] 토큰 사용량:`, {
             input: usage.input_tokens,
             output: usage.output_tokens,
@@ -294,7 +304,6 @@ ${pdfText}`;
           sendEvent('progress', { step: 4, message: 'AI 응답 수신 완료' });
 
           // 4. 응답 파싱
-          const responseText = response.content[0].type === 'text' ? response.content[0].text : '';
 
           let jsonText = responseText;
           const jsonMatch = responseText.match(/```(?:json)?\s*([\s\S]*?)```/);
