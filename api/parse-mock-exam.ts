@@ -283,11 +283,21 @@ ${pdfText}`;
             ],
           });
 
-          // 스트리밍 응답 수집
+          // 스트리밍 응답 수집 (하트비트로 Vercel 타임아웃 방지)
           let responseText = '';
+          let lastHeartbeat = Date.now();
+          const HEARTBEAT_INTERVAL = 10000; // 10초마다 하트비트
+
           for await (const event of stream) {
             if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
               responseText += event.delta.text;
+
+              // 10초마다 하트비트 전송 (Vercel 타임아웃 방지)
+              const now = Date.now();
+              if (now - lastHeartbeat > HEARTBEAT_INTERVAL) {
+                sendEvent('heartbeat', { chars: responseText.length });
+                lastHeartbeat = now;
+              }
             }
           }
 
