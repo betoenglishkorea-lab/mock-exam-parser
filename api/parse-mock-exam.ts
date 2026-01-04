@@ -267,7 +267,7 @@ ${pdfText}`;
           // 스트리밍 모드로 Claude API 호출 (10분 이상 걸릴 수 있어서 필수)
           const stream = anthropic.messages.stream({
             model: 'claude-sonnet-4-20250514',
-            max_tokens: 128000,
+            max_tokens: 64000,  // Sonnet 4 최대값
             system: [
               {
                 type: 'text',
