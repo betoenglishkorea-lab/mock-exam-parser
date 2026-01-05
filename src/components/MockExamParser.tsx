@@ -192,7 +192,8 @@ export function MockExamParser() {
     const { data } = await supabase
       .from('mock_exam_questions')
       .select('*')
-      .order('created_at', { ascending: false });
+      .order('pdf_filename', { ascending: true })
+      .order('question_number', { ascending: true });
 
     if (data) {
       setQuestions(data);
@@ -1447,6 +1448,7 @@ export function MockExamParser() {
                 <table className="min-w-full divide-y divide-gray-200">
                   <thead className="bg-gray-50">
                     <tr>
+                      <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase w-12">No.</th>
                       <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase w-24">유형</th>
                       <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase w-32">출처</th>
                       <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase">문제</th>
@@ -1458,6 +1460,9 @@ export function MockExamParser() {
                   <tbody className="divide-y divide-gray-200">
                     {filteredQuestions.map(q => (
                       <tr key={q.id} className="hover:bg-gray-50">
+                        <td className="px-3 py-2 text-center">
+                          <span className="text-sm font-medium text-gray-900">{q.question_number}</span>
+                        </td>
                         <td className="px-3 py-2">
                           <div className="text-xs">
                             <span className="font-medium text-gray-900">{q.type1}</span>
@@ -1472,6 +1477,9 @@ export function MockExamParser() {
                         <td className="px-3 py-2 text-xs text-gray-500">
                           <div>{q.source_year}년 {q.source_month}</div>
                           <div>{q.source_grade} {q.source_org}</div>
+                          <div className="text-gray-400 truncate max-w-[150px]" title={q.pdf_filename}>
+                            {q.pdf_filename?.replace(/\.pdf$/i, '').slice(0, 20)}...
+                          </div>
                         </td>
                         <td className="px-3 py-2">
                           <div
