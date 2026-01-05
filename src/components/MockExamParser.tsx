@@ -462,6 +462,25 @@ export function MockExamParser() {
     fetchQueue();
   };
 
+  // 처리중 상태가 일정 시간(5분) 이상 지속되었는지 확인
+  const isStuckProcessing = (item: PdfQueueItem): boolean => {
+    if (item.status !== 'processing' || !item.started_at) return false;
+    const startedAt = new Date(item.started_at).getTime();
+    const now = Date.now();
+    const STUCK_THRESHOLD = 5 * 60 * 1000; // 5분
+    return (now - startedAt) > STUCK_THRESHOLD;
+  };
+
+  // 처리중 경과 시간 표시
+  const getProcessingElapsed = (item: PdfQueueItem): string => {
+    if (!item.started_at) return '';
+    const startedAt = new Date(item.started_at).getTime();
+    const elapsed = Math.floor((Date.now() - startedAt) / 1000);
+    const minutes = Math.floor(elapsed / 60);
+    const seconds = elapsed % 60;
+    return `${minutes}분 ${seconds}초`;
+  };
+
   // 큐 아이템 재시도
   const retryQueueItem = async (id: string) => {
     await supabase
@@ -469,6 +488,138 @@ export function MockExamParser() {
       .update({ status: 'pending', error_message: null, retry_count: 0 })
       .eq('id', id);
     fetchQueue();
+  };
+
+  // 이어서 처리 (처리중 상태에서 중단된 경우)
+  const resumeProcessing = async (item: PdfQueueItem) => {
+    if (processing) {
+      alert('다른 처리가 진행 중입니다.');
+      return;
+    }
+
+    if (!item.storage_path) {
+      alert('Storage 경로가 없습니다.');
+      return;
+    }
+
+    // 이미 추출된 문항 수 조회
+    const { count: existingCount } = await supabase
+      .from('mock_exam_questions')
+      .select('*', { count: 'exact', head: true })
+      .eq('pdf_filename', item.filename);
+
+    const existingQuestions = existingCount || 0;
+
+    if (!confirm(`현재 ${existingQuestions}개 문항이 추출되어 있습니다.\n${existingQuestions + 1}번 문항부터 이어서 처리합니다.\n계속하시겠습니까?`)) {
+      return;
+    }
+
+    setProcessing(true);
+
+    try {
+      // Storage에서 PDF 다운로드
+      const arrayBuffer = await getPdfFromStorage(item.storage_path);
+      if (!arrayBuffer) {
+        throw new Error('Storage에서 파일을 찾을 수 없습니다.');
+      }
+
+      const pdfText = await extractTextFromArrayBuffer(arrayBuffer);
+
+      // 먼저 status를 pending으로 변경 후 다시 processing으로 (락 해제)
+      await supabase
+        .from('pdf_processing_queue')
+        .update({
+          status: 'pending',
+          error_message: null,
+        })
+        .eq('id', item.id);
+
+      // 1단계: 청크 정보 가져오기
+      console.log(`[${item.filename}] 이어서 처리 - 청크 정보 요청 중...`);
+      const initResponse = await fetch('/api/parse-mock-exam', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          queueId: item.id,
+          pdfText,
+          filename: item.filename,
+          extractedType3: item.extracted_type3,
+        }),
+      });
+
+      if (!initResponse.ok) {
+        throw new Error(`HTTP ${initResponse.status}: ${initResponse.statusText}`);
+      }
+
+      const initResult = await readSSEStream(initResponse, item.filename);
+      const { expectedQuestions, totalChunks, chunkSize } = initResult;
+
+      // 이미 추출된 문항 수를 기반으로 시작할 청크 계산
+      const startChunkIndex = Math.floor(existingQuestions / chunkSize);
+
+      console.log(`[${item.filename}] 총 ${expectedQuestions}문항, ${totalChunks}개 청크 중 ${startChunkIndex + 1}번 청크부터 시작`);
+      fetchQueue();
+
+      // 2단계: 남은 청크들만 처리
+      for (let chunkIndex = startChunkIndex; chunkIndex < totalChunks; chunkIndex++) {
+        const startNum = chunkIndex * chunkSize + 1;
+        const endNum = Math.min((chunkIndex + 1) * chunkSize, expectedQuestions);
+
+        // 이미 추출된 문항은 스킵
+        if (endNum <= existingQuestions) {
+          console.log(`[${item.filename}] 청크 ${chunkIndex + 1} 스킵 (이미 추출됨)`);
+          continue;
+        }
+
+        console.log(`[${item.filename}] 청크 ${chunkIndex + 1}/${totalChunks} 처리 시작 (문항 ${startNum}~${endNum})`);
+
+        const chunkResponse = await fetch('/api/parse-mock-exam', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            queueId: item.id,
+            pdfText,
+            filename: item.filename,
+            extractedType3: item.extracted_type3,
+            chunkIndex,
+            totalChunks,
+            expectedQuestions,
+            startNum,
+            endNum,
+          }),
+        });
+
+        if (!chunkResponse.ok) {
+          throw new Error(`청크 ${chunkIndex + 1} 실패: HTTP ${chunkResponse.status}`);
+        }
+
+        const chunkResult = await readSSEStream(chunkResponse, item.filename);
+        console.log(`[${item.filename}] 청크 ${chunkIndex + 1}/${totalChunks} 완료:`, chunkResult?.questionsCount || 0, '문항');
+
+        if (chunkIndex < totalChunks - 1) {
+          await new Promise(resolve => setTimeout(resolve, 2000));
+        }
+      }
+
+      console.log(`[${item.filename}] 이어서 처리 완료!`);
+      fetchQueue();
+      alert('이어서 처리가 완료되었습니다.');
+
+    } catch (error) {
+      console.error('이어서 처리 실패:', error);
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      await supabase
+        .from('pdf_processing_queue')
+        .update({
+          status: 'failed',
+          error_message: `이어서 처리 실패: ${errorMsg}`,
+        })
+        .eq('id', item.id);
+      fetchQueue();
+      alert(`이어서 처리 실패: ${errorMsg}`);
+    } finally {
+      setProcessing(false);
+    }
   };
 
   // 추가 추출 (누락된 문항 추출)
@@ -1117,11 +1268,21 @@ export function MockExamParser() {
                             </div>
                           )}
                           {item.status === 'processing' && (
-                            <span className="text-blue-600">{item.processed_questions || 0}/{item.total_questions || '?'}</span>
+                            <div>
+                              <span className="text-blue-600">{item.processed_questions || 0}/{item.total_questions || '?'}</span>
+                              {item.started_at && (
+                                <div className="text-xs text-gray-400 mt-1">
+                                  {getProcessingElapsed(item)} 경과
+                                  {isStuckProcessing(item) && (
+                                    <span className="text-orange-500 ml-1">(중단?)</span>
+                                  )}
+                                </div>
+                              )}
+                            </div>
                           )}
                         </td>
                         <td className="px-4 py-3">
-                          <div className="flex gap-2">
+                          <div className="flex gap-2 flex-wrap">
                             {(item.status === 'failed' || item.status === 'warning') && (
                               <button
                                 onClick={() => retryQueueItem(item.id)}
@@ -1138,6 +1299,15 @@ export function MockExamParser() {
                                 disabled={processing}
                               >
                                 추가추출
+                              </button>
+                            )}
+                            {item.status === 'processing' && isStuckProcessing(item) && (
+                              <button
+                                onClick={() => resumeProcessing(item)}
+                                className="text-purple-600 hover:text-purple-800 text-sm font-medium"
+                                disabled={processing}
+                              >
+                                이어서처리
                               </button>
                             )}
                             <button
