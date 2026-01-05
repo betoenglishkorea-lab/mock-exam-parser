@@ -220,15 +220,9 @@ export default async function handler(req: Request) {
         try {
           // 청크 모드가 아닌 경우 (첫 호출) - 문항수 계산 후 청크 정보 반환
           if (!isChunkMode) {
-            sendEvent('progress', { step: 1, message: '처리 시작...' });
+            sendEvent('progress', { step: 1, message: '청크 정보 계산 중...' });
 
-            await supabase
-              .from('pdf_processing_queue')
-              .update({
-                status: 'processing',
-                started_at: new Date().toISOString(),
-              })
-              .eq('id', queueId);
+            // 여기서는 status를 바꾸지 않음 (첫 번째 청크 처리 시 바꿈)
 
             // PDF 정답표에서 총 문항수 추출
             const answerPatterns = pdfText.match(/(\d{1,3})\s*\)?\s*[①②③④⑤]/g) || [];
@@ -266,6 +260,17 @@ export default async function handler(req: Request) {
 
           // 청크 모드 - 실제 파싱 수행
           const { type1, type2 } = findTypeMapping(extractedType3 || '');
+
+          // 첫 번째 청크일 때만 processing 상태로 변경
+          if (chunkIndex === 0) {
+            await supabase
+              .from('pdf_processing_queue')
+              .update({
+                status: 'processing',
+                started_at: new Date().toISOString(),
+              })
+              .eq('id', queueId);
+          }
 
           sendEvent('progress', {
             step: 2,
