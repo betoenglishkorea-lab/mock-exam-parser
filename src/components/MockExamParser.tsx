@@ -686,6 +686,18 @@ export function MockExamParser() {
 
     for (const item of pendingItems) {
       try {
+        // 처리 전 현재 상태 재확인 (다른 탭/브라우저에서 이미 처리 시작했을 수 있음)
+        const { data: currentItem } = await supabase
+          .from('pdf_processing_queue')
+          .select('status')
+          .eq('id', item.id)
+          .single();
+
+        if (currentItem?.status !== 'pending') {
+          console.log(`[${item.filename}] 이미 처리 중이거나 완료됨 (${currentItem?.status}), 건너뜀`);
+          continue;
+        }
+
         if (!item.storage_path) {
           await supabase
             .from('pdf_processing_queue')
@@ -711,7 +723,7 @@ export function MockExamParser() {
 
         const pdfText = await extractTextFromArrayBuffer(arrayBuffer);
 
-        // 1단계: 첫 번째 호출 - 청크 정보 가져오기
+        // 1단계: 첫 번째 호출 - 청크 정보 가져오기 (서버에서 status를 processing으로 변경)
         console.log(`[${item.filename}] 청크 정보 요청 중...`);
         const initResponse = await fetch('/api/parse-mock-exam', {
           method: 'POST',

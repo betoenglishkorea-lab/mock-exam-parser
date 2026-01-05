@@ -220,9 +220,32 @@ export default async function handler(req: Request) {
         try {
           // 청크 모드가 아닌 경우 (첫 호출) - 문항수 계산 후 청크 정보 반환
           if (!isChunkMode) {
-            sendEvent('progress', { step: 1, message: '청크 정보 계산 중...' });
+            // 먼저 현재 상태 확인 (동시 처리 방지)
+            const { data: currentQueue } = await supabase
+              .from('pdf_processing_queue')
+              .select('status')
+              .eq('id', queueId)
+              .single();
 
-            // 여기서는 status를 바꾸지 않음 (첫 번째 청크 처리 시 바꿈)
+            if (currentQueue?.status !== 'pending') {
+              sendEvent('error', {
+                message: '이미 처리 중이거나 완료된 항목입니다',
+                currentStatus: currentQueue?.status
+              });
+              controller.close();
+              return;
+            }
+
+            // status를 'processing'으로 즉시 변경 (동시 처리 방지)
+            await supabase
+              .from('pdf_processing_queue')
+              .update({
+                status: 'processing',
+                started_at: new Date().toISOString(),
+              })
+              .eq('id', queueId);
+
+            sendEvent('progress', { step: 1, message: '청크 정보 계산 중...' });
 
             // PDF 정답표에서 총 문항수 추출
             const answerPatterns = pdfText.match(/(\d{1,3})\s*\)?\s*[①②③④⑤]/g) || [];
@@ -261,15 +284,20 @@ export default async function handler(req: Request) {
           // 청크 모드 - 실제 파싱 수행
           const { type1, type2 } = findTypeMapping(extractedType3 || '');
 
-          // 첫 번째 청크일 때만 processing 상태로 변경
-          if (chunkIndex === 0) {
-            await supabase
-              .from('pdf_processing_queue')
-              .update({
-                status: 'processing',
-                started_at: new Date().toISOString(),
-              })
-              .eq('id', queueId);
+          // 현재 상태 확인 (processing이 아니면 중단된 것으로 간주)
+          const { data: currentQueue } = await supabase
+            .from('pdf_processing_queue')
+            .select('status')
+            .eq('id', queueId)
+            .single();
+
+          if (currentQueue?.status !== 'processing') {
+            sendEvent('error', {
+              message: '처리가 중단되었거나 이미 완료되었습니다',
+              currentStatus: currentQueue?.status
+            });
+            controller.close();
+            return;
           }
 
           sendEvent('progress', {
