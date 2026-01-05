@@ -1,8 +1,9 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { createClient } from '@supabase/supabase-js';
 
-// Vercel Serverless Function 설정 (Pro: 최대 300초, Fluid Compute: 800초)
+// Vercel Edge Function 설정
 export const config = {
+  runtime: 'edge',
   maxDuration: 300,
 };
 
@@ -239,8 +240,8 @@ export default async function handler(req: Request) {
             expectedQuestions = questionPatterns.length;
           }
 
-          // 청크 분할 설정: 10문항씩 분할 (Vercel Serverless 300초 타임아웃)
-          const CHUNK_SIZE = 10;
+          // 청크 분할 설정: 5문항씩 분할 (Edge 25초 첫응답 + 300초 스트리밍)
+          const CHUNK_SIZE = 5;
           const needsChunking = expectedQuestions > CHUNK_SIZE;
           const totalChunks = needsChunking ? Math.ceil(expectedQuestions / CHUNK_SIZE) : 1;
 
