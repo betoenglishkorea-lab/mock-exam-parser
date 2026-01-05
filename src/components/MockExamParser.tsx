@@ -1448,7 +1448,7 @@ export function MockExamParser() {
                 <table className="min-w-full divide-y divide-gray-200">
                   <thead className="bg-gray-50">
                     <tr>
-                      <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase w-12">No.</th>
+                      <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase w-16">문항번호</th>
                       <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase w-24">유형</th>
                       <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase w-32">출처</th>
                       <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase">문제</th>
