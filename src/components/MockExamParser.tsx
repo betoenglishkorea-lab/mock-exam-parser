@@ -1229,7 +1229,18 @@ export function MockExamParser() {
                     {queue.map(item => (
                       <tr key={item.id} className="hover:bg-gray-50">
                         <td className="px-4 py-3">
-                          <div className="text-sm font-medium text-gray-900 truncate max-w-xs" title={item.filename}>
+                          <div
+                            className="text-sm font-medium text-blue-600 hover:text-blue-800 truncate max-w-xs cursor-pointer hover:underline"
+                            title={`${item.filename} (클릭하여 PDF 보기)`}
+                            onClick={() => {
+                              if (item.storage_path) {
+                                const { data } = supabase.storage.from(STORAGE_BUCKET).getPublicUrl(item.storage_path);
+                                window.open(data.publicUrl, '_blank');
+                              } else {
+                                alert('Storage 경로가 없습니다.');
+                              }
+                            }}
+                          >
                             {item.filename}
                           </div>
                           <div className="text-xs text-gray-500">
