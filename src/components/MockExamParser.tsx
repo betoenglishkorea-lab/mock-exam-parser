@@ -1232,10 +1232,16 @@ export function MockExamParser() {
                           <div
                             className="text-sm font-medium text-blue-600 hover:text-blue-800 truncate max-w-xs cursor-pointer hover:underline"
                             title={`${item.filename} (클릭하여 PDF 보기)`}
-                            onClick={() => {
+                            onClick={async () => {
                               if (item.storage_path) {
-                                const { data } = supabase.storage.from(STORAGE_BUCKET).getPublicUrl(item.storage_path);
-                                window.open(data.publicUrl, '_blank');
+                                const { data, error } = await supabase.storage
+                                  .from(STORAGE_BUCKET)
+                                  .createSignedUrl(item.storage_path, 3600); // 1시간 유효
+                                if (error) {
+                                  alert(`PDF 열기 실패: ${error.message}`);
+                                } else if (data?.signedUrl) {
+                                  window.open(data.signedUrl, '_blank');
+                                }
                               } else {
                                 alert('Storage 경로가 없습니다.');
                               }
