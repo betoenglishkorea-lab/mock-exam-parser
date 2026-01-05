@@ -488,7 +488,12 @@ export function MockExamParser() {
       .from('pdf_processing_queue')
       .update({ status: 'pending', error_message: null, retry_count: 0 })
       .eq('id', id);
-    fetchQueue();
+    await fetchQueue();
+
+    // 재시도 후 자동으로 처리 시작
+    setTimeout(() => {
+      startProcessing();
+    }, 100);
   };
 
   // 이어서 처리 (처리중 상태에서 중단된 경우)
