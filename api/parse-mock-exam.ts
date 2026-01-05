@@ -159,6 +159,9 @@ const PARSE_PROMPT = `당신은 교육청 모의고사 PDF 텍스트를 구조�
 ## PDF 텍스트:
 `;
 
+// 청크 사이즈 설정 (20문항씩 - 캐싱으로 입력토큰 절약)
+const CHUNK_SIZE = 20;
+
 export default async function handler(req: Request) {
   // CORS 헤더
   const corsHeaders = {
@@ -184,9 +187,17 @@ export default async function handler(req: Request) {
   try {
     const body = await req.json();
     queueId = body.queueId;
-    const { pdfText, filename, extractedType3, mode, existingQuestionNumbers } = body;
-    // mode: 'full' (기본값) | 'additional' (추가 추출)
-    // existingQuestionNumbers: 이미 추출된 문항 번호 배열 (추가 추출 모드에서 사용)
+    const {
+      pdfText,
+      filename,
+      extractedType3,
+      // 청크 모드 파라미터
+      chunkIndex,      // 현재 청크 인덱스 (0부터 시작)
+      totalChunks,     // 총 청크 수
+      expectedQuestions, // 예상 총 문항 수
+      startNum,        // 시작 문항 번호
+      endNum,          // 끝 문항 번호
+    } = body;
 
     if (!queueId || !pdfText) {
       return new Response(
@@ -195,7 +206,7 @@ export default async function handler(req: Request) {
       );
     }
 
-    const isAdditionalMode = mode === 'additional';
+    const isChunkMode = chunkIndex !== undefined && totalChunks !== undefined;
 
     // SSE 스트리밍 응답 설정
     const encoder = new TextEncoder();
@@ -207,281 +218,226 @@ export default async function handler(req: Request) {
         };
 
         try {
-          // 1. 큐 상태 업데이트: processing
-          sendEvent('progress', { step: 1, message: '처리 시작...' });
+          // 청크 모드가 아닌 경우 (첫 호출) - 문항수 계산 후 청크 정보 반환
+          if (!isChunkMode) {
+            sendEvent('progress', { step: 1, message: '처리 시작...' });
 
-          await supabase
-            .from('pdf_processing_queue')
-            .update({
-              status: 'processing',
-              started_at: new Date().toISOString(),
-            })
-            .eq('id', queueId);
+            await supabase
+              .from('pdf_processing_queue')
+              .update({
+                status: 'processing',
+                started_at: new Date().toISOString(),
+              })
+              .eq('id', queueId);
 
-          // 2. type1, type2 매핑 및 예상 문항 수 추출
-          const { type1, type2 } = findTypeMapping(extractedType3 || '');
+            // PDF 정답표에서 총 문항수 추출
+            const answerPatterns = pdfText.match(/(\d{1,3})\s*\)?\s*[①②③④⑤]/g) || [];
+            const questionNumbers = answerPatterns.map((p: string) => {
+              const match = p.match(/(\d{1,3})/);
+              return match ? parseInt(match[1], 10) : 0;
+            });
+            const maxQuestionNumber = questionNumbers.length > 0 ? Math.max(...questionNumbers) : 0;
 
-          // PDF 정답표에서 총 문항수 추출 (가장 정확한 방법)
-          // 정답표 패턴들:
-          // - "18①", "105③" (번호+정답 붙어있음)
-          // - "18) ③", "105) ①" (번호+괄호+공백+정답)
-          // 마지막 페이지에 있는 정답표에서 가장 큰 문항 번호 = 총 문항수
-          const answerPatterns = pdfText.match(/(\d{1,3})\s*\)?\s*[①②③④⑤]/g) || [];
-          const questionNumbers = answerPatterns.map(p => {
-            const match = p.match(/(\d{1,3})/);
-            return match ? parseInt(match[1], 10) : 0;
-          });
-          const maxQuestionNumber = questionNumbers.length > 0 ? Math.max(...questionNumbers) : 0;
+            let totalQuestions = maxQuestionNumber;
+            if (totalQuestions === 0) {
+              const questionPatterns = pdfText.match(/(?:^|\n)\s*(\d{1,3})\s*[.)]/gm) || [];
+              totalQuestions = questionPatterns.length;
+            }
 
-          // fallback: 정답표가 없으면 기존 방식 사용
-          let expectedQuestions = maxQuestionNumber;
-          if (expectedQuestions === 0) {
-            const questionPatterns = pdfText.match(/(?:^|\n)\s*(\d{1,3})\s*[.)]/gm) || [];
-            expectedQuestions = questionPatterns.length;
+            const chunks = Math.ceil(totalQuestions / CHUNK_SIZE);
+
+            // 청크 정보 반환 (프론트에서 청크별로 API 호출)
+            sendEvent('chunk_info', {
+              expectedQuestions: totalQuestions,
+              totalChunks: chunks,
+              chunkSize: CHUNK_SIZE,
+            });
+
+            sendEvent('complete', {
+              success: true,
+              needsChunking: chunks > 1,
+              expectedQuestions: totalQuestions,
+              totalChunks: chunks,
+            });
+
+            controller.close();
+            return;
           }
 
-          // 청크 분할 설정: 5문항씩 분할 (Edge 25초 첫응답 + 300초 스트리밍)
-          const CHUNK_SIZE = 5;
-          const needsChunking = expectedQuestions > CHUNK_SIZE;
-          const totalChunks = needsChunking ? Math.ceil(expectedQuestions / CHUNK_SIZE) : 1;
+          // 청크 모드 - 실제 파싱 수행
+          const { type1, type2 } = findTypeMapping(extractedType3 || '');
 
           sendEvent('progress', {
             step: 2,
-            message: needsChunking
-              ? `유형 매핑 완료 (예상 ${expectedQuestions}개 → ${totalChunks}개 청크로 분할)`
-              : `유형 매핑 완료 (예상 문항: ${expectedQuestions}개)`
+            message: `청크 ${chunkIndex + 1}/${totalChunks} 처리 중 (문항 ${startNum}~${endNum})...`
           });
 
-          // 3. Claude API 호출 (청크별 처리 + 즉시 DB 저장)
-          let allQuestions: any[] = [];
-          const savedQuestionNumbers = new Set<number>();  // 이미 저장된 문항 번호 추적
-          let totalSavedQuestions = 0;
-
-          for (let chunkIdx = 0; chunkIdx < totalChunks; chunkIdx++) {
-            const startNum = chunkIdx * CHUNK_SIZE + 1;
-            const endNum = Math.min((chunkIdx + 1) * CHUNK_SIZE, expectedQuestions);
-
-            const chunkMessage = needsChunking
-              ? `청크 ${chunkIdx + 1}/${totalChunks} 처리 중 (문항 ${startNum}~${endNum})...`
-              : isAdditionalMode
-                ? `추가 추출 모드 (기존 ${existingQuestionNumbers?.length || 0}문항 제외)`
-                : 'AI 분석 중... (1~2분 소요)';
-            sendEvent('progress', { step: 3, message: chunkMessage });
-
-            // 파일명에서 유형 힌트 생성
-            let userContent = `## 파일명 (유형 힌트)
+          // 파일명에서 유형 힌트 생성
+          let userContent = `## 파일명 (유형 힌트)
 ${filename}
 
 ## PDF 텍스트
-${pdfText}`;
-
-            // 청크 모드: 특정 범위만 추출 지시
-            if (needsChunking) {
-              userContent += `
+${pdfText}
 
 ## 중요: 부분 추출 모드
 이 PDF에는 총 ${expectedQuestions}개의 문항이 있습니다.
 지금은 문항 번호 ${startNum}번부터 ${endNum}번까지만 추출하세요.
 다른 문항은 무시하고, 해당 범위의 문항만 정확하게 추출해주세요.`;
-            }
 
-            // 추가 추출 모드: 기존 문항 제외 지시
-            if (isAdditionalMode && existingQuestionNumbers?.length > 0) {
-              userContent += `
-
-## 중요: 추가 추출 모드
-다음 문항 번호들은 이미 추출되었습니다. 이 번호들을 제외한 나머지 문항만 추출하세요:
-이미 추출된 문항: ${existingQuestionNumbers.join(', ')}
-
-위 번호들을 제외한 모든 문항을 빠짐없이 추출해주세요.`;
-            }
-
-            // 스트리밍 모드로 Claude API 호출 (10분 이상 걸릴 수 있어서 필수)
-            const apiStream = anthropic.messages.stream({
-              model: 'claude-sonnet-4-20250514',
-              max_tokens: 64000,  // Sonnet 4 최대값
-              system: [
-                {
-                  type: 'text',
-                  text: PARSE_PROMPT,
-                  cache_control: { type: 'ephemeral' }
-                }
-              ],
-              messages: [
-                {
-                  role: 'user',
-                  content: userContent,
-                },
-              ],
-            });
-
-            // 스트리밍 응답 수집 (하트비트로 Vercel 타임아웃 방지)
-            let responseText = '';
-            let lastHeartbeat = Date.now();
-            const HEARTBEAT_INTERVAL = 10000; // 10초마다 하트비트
-
-            for await (const event of apiStream) {
-              if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
-                responseText += event.delta.text;
-
-                // 10초마다 하트비트 전송 (Vercel 타임아웃 방지)
-                const now = Date.now();
-                if (now - lastHeartbeat > HEARTBEAT_INTERVAL) {
-                  sendEvent('heartbeat', {
-                    chunk: chunkIdx + 1,
-                    totalChunks,
-                    chars: responseText.length
-                  });
-                  lastHeartbeat = now;
-                }
+          // 스트리밍 모드로 Claude API 호출
+          const apiStream = anthropic.messages.stream({
+            model: 'claude-sonnet-4-20250514',
+            max_tokens: 64000,
+            system: [
+              {
+                type: 'text',
+                text: PARSE_PROMPT,
+                cache_control: { type: 'ephemeral' }
               }
-            }
+            ],
+            messages: [
+              {
+                role: 'user',
+                content: userContent,
+              },
+            ],
+          });
 
-            // 최종 메시지에서 사용량 정보 가져오기
-            const finalMessage = await apiStream.finalMessage();
-            const usage = finalMessage.usage as any;
-            console.log(`[${filename}] 청크 ${chunkIdx + 1}/${totalChunks} 토큰 사용량:`, {
-              input: usage.input_tokens,
-              output: usage.output_tokens,
-              cache_creation_input_tokens: usage.cache_creation_input_tokens || 0,
-              cache_read_input_tokens: usage.cache_read_input_tokens || 0,
-            });
+          // 스트리밍 응답 수집 (하트비트로 Vercel 타임아웃 방지)
+          let responseText = '';
+          let lastHeartbeat = Date.now();
+          const HEARTBEAT_INTERVAL = 10000; // 10초마다 하트비트
 
-            // 응답 파싱
-            let jsonText = responseText;
-            const jsonMatch = responseText.match(/```(?:json)?\s*([\s\S]*?)```/);
-            if (jsonMatch) {
-              jsonText = jsonMatch[1].trim();
-            }
+          for await (const event of apiStream) {
+            if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
+              responseText += event.delta.text;
 
-            let chunkQuestions: any[];
-            try {
-              chunkQuestions = JSON.parse(jsonText);
-            } catch (parseError) {
-              console.error(`청크 ${chunkIdx + 1} JSON 파싱 실패:`, parseError);
-              // 청크 하나 실패해도 계속 진행
-              sendEvent('warning', {
-                message: `청크 ${chunkIdx + 1} 파싱 실패, 계속 진행`,
-                details: responseText.substring(0, 200)
-              });
-              continue;
-            }
-
-            // 청크별 중복 제거 (이미 저장된 문항 번호 제외)
-            const newQuestions = chunkQuestions.filter((q: any) => {
-              const num = q.question_number;
-              if (savedQuestionNumbers.has(num)) {
-                return false;
-              }
-              return true;
-            });
-
-            if (newQuestions.length > 0) {
-              // 청크별 즉시 DB 저장
-              const chunkInsertData = newQuestions.map((q: any, index: number) => {
-                const questionType3 = q.type3 || extractedType3 || '';
-                const mapping = questionType3 ? findTypeMapping(questionType3) : { type1, type2 };
-                return {
-                  type1: mapping.type1 || type1 || q.type1 || '',
-                  type2: mapping.type2 || type2 || q.type2 || '',
-                  type3: questionType3,
-                  source_year: q.source_year || null,
-                  source_month: q.source_month || '',
-                  source_grade: q.source_grade || '',
-                  source_org: q.source_org || '',
-                  source_number: q.source_number || null,
-                  question_number: q.question_number || index + 1,
-                  question_text: q.question_text || '',
-                  passage: q.passage || '',
-                  choice_1: q.choice_1 || '',
-                  choice_2: q.choice_2 || '',
-                  choice_3: q.choice_3 || '',
-                  choice_4: q.choice_4 || '',
-                  choice_5: q.choice_5 || '',
-                  correct_answer: q.correct_answer || '',
-                  model_translation: q.model_translation || '',
-                  pdf_filename: filename || '',
-                };
-              });
-
-              const { error: chunkInsertError } = await supabase
-                .from('mock_exam_questions')
-                .insert(chunkInsertData);
-
-              if (chunkInsertError) {
-                sendEvent('warning', {
-                  message: `청크 ${chunkIdx + 1} DB 저장 실패`,
-                  details: chunkInsertError.message
+              // 10초마다 하트비트 전송
+              const now = Date.now();
+              if (now - lastHeartbeat > HEARTBEAT_INTERVAL) {
+                sendEvent('heartbeat', {
+                  chunk: chunkIndex + 1,
+                  totalChunks,
+                  chars: responseText.length
                 });
-              } else {
-                // 저장된 문항 번호 기록
-                newQuestions.forEach((q: any) => savedQuestionNumbers.add(q.question_number));
-                totalSavedQuestions += newQuestions.length;
-                sendEvent('progress', {
-                  step: 3,
-                  message: `청크 ${chunkIdx + 1}/${totalChunks} 저장 완료 (${newQuestions.length}개, 누적 ${totalSavedQuestions}개)`
-                });
+                lastHeartbeat = now;
               }
-            }
-
-            allQuestions = allQuestions.concat(chunkQuestions);
-
-            // 청크 사이 딜레이 (API 레이트 리밋 방지)
-            if (chunkIdx < totalChunks - 1) {
-              await new Promise(resolve => setTimeout(resolve, 1000));
             }
           }
 
-          sendEvent('progress', { step: 4, message: `AI 처리 완료 (총 ${totalSavedQuestions}개 저장됨)` });
+          // 토큰 사용량 로깅
+          const finalMessage = await apiStream.finalMessage();
+          const usage = finalMessage.usage as any;
+          console.log(`[${filename}] 청크 ${chunkIndex + 1}/${totalChunks} 토큰:`, {
+            input: usage.input_tokens,
+            output: usage.output_tokens,
+            cache_read: usage.cache_read_input_tokens || 0,
+          });
 
-          // 4. 저장 결과 확인
-          if (totalSavedQuestions === 0) {
-            await supabase
-              .from('pdf_processing_queue')
-              .update({
-                status: 'failed',
-                error_message: '추출된 문항이 없습니다',
-              })
-              .eq('id', queueId);
+          // 응답 파싱
+          let jsonText = responseText;
+          const jsonMatch = responseText.match(/```(?:json)?\s*([\s\S]*?)```/);
+          if (jsonMatch) {
+            jsonText = jsonMatch[1].trim();
+          }
 
-            sendEvent('error', { message: '추출된 문항이 없습니다' });
+          let chunkQuestions: any[];
+          try {
+            chunkQuestions = JSON.parse(jsonText);
+          } catch (parseError) {
+            console.error(`청크 ${chunkIndex + 1} JSON 파싱 실패:`, parseError);
+            sendEvent('error', {
+              message: `청크 ${chunkIndex + 1} 파싱 실패`,
+              details: responseText.substring(0, 500)
+            });
             controller.close();
             return;
           }
 
-          sendEvent('progress', { step: 5, message: `${totalSavedQuestions}개 문제 DB 저장 완료` });
+          // DB에 저장
+          if (chunkQuestions.length > 0) {
+            const insertData = chunkQuestions.map((q: any, index: number) => {
+              const questionType3 = q.type3 || extractedType3 || '';
+              const mapping = questionType3 ? findTypeMapping(questionType3) : { type1, type2 };
+              return {
+                type1: mapping.type1 || type1 || q.type1 || '',
+                type2: mapping.type2 || type2 || q.type2 || '',
+                type3: questionType3,
+                source_year: q.source_year || null,
+                source_month: q.source_month || '',
+                source_grade: q.source_grade || '',
+                source_org: q.source_org || '',
+                source_number: q.source_number || null,
+                question_number: q.question_number || index + 1,
+                question_text: q.question_text || '',
+                passage: q.passage || '',
+                choice_1: q.choice_1 || '',
+                choice_2: q.choice_2 || '',
+                choice_3: q.choice_3 || '',
+                choice_4: q.choice_4 || '',
+                choice_5: q.choice_5 || '',
+                correct_answer: q.correct_answer || '',
+                model_translation: q.model_translation || '',
+                pdf_filename: filename || '',
+              };
+            });
 
-          // 6. 추출 비율 계산 및 경고
-          const extractionRatio = expectedQuestions > 0
-            ? Math.round((totalSavedQuestions / expectedQuestions) * 100)
-            : 100;
-          const isLowExtraction = extractionRatio < 80 && expectedQuestions > 0;
+            const { error: insertError } = await supabase
+              .from('mock_exam_questions')
+              .insert(insertData);
 
-          // 7. 큐 상태 업데이트: completed
-          await supabase
-            .from('pdf_processing_queue')
-            .update({
-              status: isLowExtraction ? 'warning' : 'completed',
-              total_questions: totalSavedQuestions,
-              processed_questions: totalSavedQuestions,
-              expected_questions: expectedQuestions,
-              extraction_ratio: extractionRatio,
-              progress: 100,
-              completed_at: new Date().toISOString(),
-              error_message: isLowExtraction
-                ? `추출 비율 낮음: ${totalSavedQuestions}/${expectedQuestions} (${extractionRatio}%)`
-                : null,
-            })
-            .eq('id', queueId);
+            if (insertError) {
+              sendEvent('warning', {
+                message: `청크 ${chunkIndex + 1} DB 저장 실패`,
+                details: insertError.message
+              });
+            } else {
+              sendEvent('progress', {
+                step: 3,
+                message: `청크 ${chunkIndex + 1}/${totalChunks} 저장 완료 (${chunkQuestions.length}개)`
+              });
+            }
+          }
 
-          // 8. 완료 이벤트 전송
+          // 마지막 청크인 경우 큐 상태 업데이트
+          const isLastChunk = chunkIndex === totalChunks - 1;
+          if (isLastChunk) {
+            // 저장된 총 문항 수 조회
+            const { count } = await supabase
+              .from('mock_exam_questions')
+              .select('*', { count: 'exact', head: true })
+              .eq('pdf_filename', filename);
+
+            const totalSaved = count || 0;
+            const extractionRatio = expectedQuestions > 0
+              ? Math.round((totalSaved / expectedQuestions) * 100)
+              : 100;
+            const isLowExtraction = extractionRatio < 80 && expectedQuestions > 0;
+
+            await supabase
+              .from('pdf_processing_queue')
+              .update({
+                status: isLowExtraction ? 'warning' : 'completed',
+                total_questions: totalSaved,
+                processed_questions: totalSaved,
+                expected_questions: expectedQuestions,
+                extraction_ratio: extractionRatio,
+                progress: 100,
+                completed_at: new Date().toISOString(),
+                error_message: isLowExtraction
+                  ? `추출 비율 낮음: ${totalSaved}/${expectedQuestions} (${extractionRatio}%)`
+                  : null,
+              })
+              .eq('id', queueId);
+          }
+
+          // 완료 이벤트 전송
           sendEvent('complete', {
             success: true,
-            questionsCount: totalSavedQuestions,
-            expectedQuestions,
-            extractionRatio,
-            warning: isLowExtraction ? `추출 비율 낮음 (${extractionRatio}%)` : null,
-            message: `${totalSavedQuestions}개 문제 저장 완료`,
+            chunkIndex,
+            questionsCount: chunkQuestions.length,
+            isLastChunk,
+            message: `청크 ${chunkIndex + 1}/${totalChunks} 완료`,
           });
 
           controller.close();

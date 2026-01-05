@@ -623,6 +623,55 @@ export function MockExamParser() {
     return textParts.join('\n\n');
   };
 
+  // SSE 스트림 읽기 헬퍼 함수
+  const readSSEStream = async (response: Response, filename: string): Promise<any> => {
+    if (!response.body) {
+      throw new Error('응답 스트림이 없습니다.');
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let result: any = null;
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+
+      let currentEventType = '';
+      for (const line of lines) {
+        if (line.startsWith('event: ')) {
+          currentEventType = line.substring(7).trim();
+        } else if (line.startsWith('data: ')) {
+          const dataStr = line.substring(6);
+          if (!dataStr) continue;
+
+          try {
+            const data = JSON.parse(dataStr);
+            console.log(`[${filename}] ${currentEventType}:`, data.message || data);
+
+            if (currentEventType === 'chunk_info') {
+              result = { ...result, ...data };
+            }
+            if (currentEventType === 'complete') {
+              result = { ...result, ...data };
+            }
+            if (currentEventType === 'error') {
+              throw new Error(data.message || data.details || 'API 오류');
+            }
+          } catch (parseErr) {
+            if (!(parseErr instanceof SyntaxError)) throw parseErr;
+          }
+        }
+      }
+    }
+    return result;
+  };
+
   // 대기중인 항목 처리 시작
   const startProcessing = async () => {
     if (processing) return;
@@ -660,18 +709,11 @@ export function MockExamParser() {
           continue;
         }
 
-        await supabase
-          .from('pdf_processing_queue')
-          .update({
-            status: 'processing',
-            started_at: new Date().toISOString(),
-          })
-          .eq('id', item.id);
-        fetchQueue();
-
         const pdfText = await extractTextFromArrayBuffer(arrayBuffer);
 
-        const response = await fetch('/api/parse-mock-exam', {
+        // 1단계: 첫 번째 호출 - 청크 정보 가져오기
+        console.log(`[${item.filename}] 청크 정보 요청 중...`);
+        const initResponse = await fetch('/api/parse-mock-exam', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -682,126 +724,57 @@ export function MockExamParser() {
           }),
         });
 
-        // 에러 응답 체크 (SSE가 아닌 JSON 에러 응답인 경우)
-        if (!response.ok) {
-          const contentType = response.headers.get('content-type');
-          if (contentType?.includes('application/json')) {
-            const errorData = await response.json();
-            throw new Error(errorData.error || `HTTP ${response.status}`);
-          } else {
-            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-          }
+        if (!initResponse.ok) {
+          throw new Error(`HTTP ${initResponse.status}: ${initResponse.statusText}`);
         }
 
-        // SSE 스트림 읽기
-        if (!response.body) {
-          throw new Error('응답 스트림이 없습니다.');
-        }
+        const initResult = await readSSEStream(initResponse, item.filename);
+        const { expectedQuestions, totalChunks, chunkSize } = initResult;
 
-        const reader = response.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = '';
-        let isCompleted = false;  // complete 이벤트 수신 여부
-
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-
-          buffer += decoder.decode(value, { stream: true });
-
-          // SSE 이벤트 파싱
-          const lines = buffer.split('\n');
-          buffer = lines.pop() || '';
-
-          let currentEventType = '';
-          for (const line of lines) {
-            if (line.startsWith('event: ')) {
-              currentEventType = line.substring(7).trim();
-              console.log('SSE Event:', currentEventType);
-            } else if (line.startsWith('data: ')) {
-              const dataStr = line.substring(6);
-              if (!dataStr) continue; // 빈 데이터 무시
-
-              try {
-                const data = JSON.parse(dataStr);
-                console.log('SSE Data:', data);
-
-                if (data.message) {
-                  console.log(`[${item.filename}] ${data.message}`);
-                }
-
-                // complete 이벤트 확인
-                if (currentEventType === 'complete' || data.success === true) {
-                  isCompleted = true;
-                  console.log(`[${item.filename}] 처리 완료!`);
-                }
-
-                // 에러 이벤트 처리
-                if (currentEventType === 'error' || data.success === false || data.error) {
-                  throw new Error(data.message || data.error || 'API 처리 실패');
-                }
-              } catch (parseErr) {
-                // JSON 파싱 실패 시 - 실제 에러인지 확인
-                if (parseErr instanceof SyntaxError) {
-                  console.warn('SSE 데이터 파싱 스킵:', dataStr.substring(0, 100));
-                } else {
-                  // JSON 파싱 에러가 아니면 실제 에러이므로 다시 throw
-                  throw parseErr;
-                }
-              }
-            }
-          }
-        }
-
-        // complete 이벤트 없이 스트림 종료된 경우 - 서버 처리 완료 대기
-        if (!isCompleted) {
-          console.warn(`[${item.filename}] 스트림이 완료 이벤트 없이 종료됨, 서버 처리 완료 대기...`);
-
-          // 서버에서 처리 완료될 때까지 폴링 (최대 15분 - 청크당 3분 x 5청크 기준)
-          const maxWaitTime = 15 * 60 * 1000; // 15분
-          const pollInterval = 5000; // 5초마다 확인
-          const startTime = Date.now();
-
-          while (Date.now() - startTime < maxWaitTime) {
-            await new Promise(resolve => setTimeout(resolve, pollInterval));
-
-            const { data: currentStatus } = await supabase
-              .from('pdf_processing_queue')
-              .select('status')
-              .eq('id', item.id)
-              .single();
-
-            console.log(`[${item.filename}] 폴링 상태: ${currentStatus?.status}`);
-
-            if (currentStatus?.status !== 'processing') {
-              // 처리 완료됨 (completed, failed, warning 등)
-              console.log(`[${item.filename}] 서버 처리 완료: ${currentStatus?.status}`);
-              break;
-            }
-          }
-
-          // 5분 후에도 processing이면 실패 처리
-          const { data: finalStatus } = await supabase
-            .from('pdf_processing_queue')
-            .select('status')
-            .eq('id', item.id)
-            .single();
-
-          if (finalStatus?.status === 'processing') {
-            await supabase
-              .from('pdf_processing_queue')
-              .update({
-                status: 'failed',
-                error_message: '처리 시간 초과 (15분)',
-              })
-              .eq('id', item.id);
-          }
-        }
-
+        console.log(`[${item.filename}] 총 ${expectedQuestions}문항, ${totalChunks}개 청크로 분할`);
         fetchQueue();
+
+        // 2단계: 청크별로 API 호출 (각각 300초 제한)
+        for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex++) {
+          const startNum = chunkIndex * chunkSize + 1;
+          const endNum = Math.min((chunkIndex + 1) * chunkSize, expectedQuestions);
+
+          console.log(`[${item.filename}] 청크 ${chunkIndex + 1}/${totalChunks} 처리 시작 (문항 ${startNum}~${endNum})`);
+
+          const chunkResponse = await fetch('/api/parse-mock-exam', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              queueId: item.id,
+              pdfText,
+              filename: item.filename,
+              extractedType3: item.extracted_type3,
+              chunkIndex,
+              totalChunks,
+              expectedQuestions,
+              startNum,
+              endNum,
+            }),
+          });
+
+          if (!chunkResponse.ok) {
+            throw new Error(`청크 ${chunkIndex + 1} 실패: HTTP ${chunkResponse.status}`);
+          }
+
+          const chunkResult = await readSSEStream(chunkResponse, item.filename);
+          console.log(`[${item.filename}] 청크 ${chunkIndex + 1}/${totalChunks} 완료:`, chunkResult?.questionsCount || 0, '문항');
+
+          // 청크 사이 딜레이
+          if (chunkIndex < totalChunks - 1) {
+            await new Promise(resolve => setTimeout(resolve, 2000));
+          }
+        }
+
+        console.log(`[${item.filename}] 모든 청크 처리 완료!`);
+        fetchQueue();
+
       } catch (error) {
         console.error(`처리 실패: ${item.filename}`, error);
-        // 에러 메시지 간결하게 처리
         const errorMsg = error instanceof Error
           ? error.message
           : String(error).substring(0, 200);
@@ -813,7 +786,6 @@ export function MockExamParser() {
           })
           .eq('id', item.id);
         fetchQueue();
-        // 실패해도 다음 PDF 처리 계속
         console.log(`[${item.filename}] 실패 처리 완료, 다음 PDF로 이동...`);
         await new Promise(resolve => setTimeout(resolve, 3000));
         continue;
