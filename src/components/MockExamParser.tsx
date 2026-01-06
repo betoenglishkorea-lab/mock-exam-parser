@@ -1758,14 +1758,31 @@ export function MockExamParser() {
                         <td className="px-4 py-3 text-sm">
                           {(item.status === 'completed' || item.status === 'warning') && (
                             <div>
-                              <span className={`font-medium ${item.status === 'warning' ? 'text-orange-600' : 'text-green-600'}`}>
-                                {item.actual_questions ?? item.total_questions}문제
-                              </span>
-                              {item.expected_questions && item.expected_questions > 0 && (
-                                <span className="text-gray-400 text-xs ml-1">
-                                  /{item.expected_questions} ({Math.round(((item.actual_questions ?? item.total_questions) / item.expected_questions) * 100)}%)
-                                </span>
-                              )}
+                              {(() => {
+                                const actualCount = item.actual_questions ?? item.total_questions ?? 0;
+                                const expectedCount = item.expected_questions || 0;
+                                const hasDiscrepancy = expectedCount > 0 && actualCount < expectedCount;
+                                const ratio = expectedCount > 0 ? Math.round((actualCount / expectedCount) * 100) : 100;
+
+                                // 색상 결정: 100% = 녹색, 80-99% = 주황, 80% 미만 = 빨강
+                                let colorClass = 'text-green-600';
+                                if (hasDiscrepancy) {
+                                  colorClass = ratio >= 80 ? 'text-orange-600' : 'text-red-600';
+                                }
+
+                                return (
+                                  <>
+                                    <span className={`font-medium ${colorClass}`}>
+                                      {actualCount}문제
+                                    </span>
+                                    {expectedCount > 0 && (
+                                      <span className={`text-xs ml-1 ${hasDiscrepancy ? 'text-gray-500' : 'text-gray-400'}`}>
+                                        /{expectedCount} ({ratio}%)
+                                      </span>
+                                    )}
+                                  </>
+                                );
+                              })()}
                             </div>
                           )}
                           {item.status === 'processing' && (
