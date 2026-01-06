@@ -514,19 +514,21 @@ ${pdfText}
 
           controller.close();
         } catch (error) {
-          console.error('API 오류:', error);
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          const errorStack = error instanceof Error ? error.stack : '';
+          console.error('API 오류:', errorMessage, errorStack);
 
           if (queueId) {
             await supabase
               .from('pdf_processing_queue')
               .update({
                 status: 'failed',
-                error_message: String(error),
+                error_message: errorMessage.substring(0, 500),
               })
               .eq('id', queueId);
           }
 
-          sendEvent('error', { message: '서버 오류', details: String(error) });
+          sendEvent('error', { message: '서버 오류', details: errorMessage });
           controller.close();
         }
       },
