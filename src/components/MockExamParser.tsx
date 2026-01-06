@@ -149,6 +149,7 @@ export function MockExamParser() {
   const [showChunkModal, setShowChunkModal] = useState(false);
   const [chunkTargetItem, setChunkTargetItem] = useState<PdfQueueItem | null>(null);
   const [chunkRange, setChunkRange] = useState({ start: 1, end: 10 });
+  const [chunkAnalysisInfo, setChunkAnalysisInfo] = useState<{ analyzedNumbers: number[], maxNumber: number } | null>(null);
 
   // 통계
   const [stats, setStats] = useState({
@@ -641,9 +642,35 @@ export function MockExamParser() {
   };
 
   // 청크 재분석 모달 열기
-  const openChunkReanalyzeModal = (item: PdfQueueItem) => {
+  const openChunkReanalyzeModal = async (item: PdfQueueItem) => {
     setChunkTargetItem(item);
     setChunkRange({ start: 1, end: Math.min(10, item.total_questions || 10) });
+
+    // DB에서 현재 분석된 문항 번호 조회
+    try {
+      const { data: questions } = await supabase
+        .from('mock_exam_questions')
+        .select('question_number')
+        .eq('pdf_filename', item.filename)
+        .order('question_number', { ascending: true });
+
+      if (questions && questions.length > 0) {
+        const numbers = questions.map(q => q.question_number);
+        const maxNum = Math.max(...numbers);
+        setChunkAnalysisInfo({ analyzedNumbers: numbers, maxNumber: maxNum });
+
+        // 실패 상태일 경우 다음 번호부터 시작하도록 설정
+        if (item.status === 'failed') {
+          setChunkRange({ start: maxNum + 1, end: Math.min(maxNum + 10, item.total_questions || maxNum + 10) });
+        }
+      } else {
+        setChunkAnalysisInfo({ analyzedNumbers: [], maxNumber: 0 });
+      }
+    } catch (err) {
+      console.error('문항 정보 조회 실패:', err);
+      setChunkAnalysisInfo(null);
+    }
+
     setShowChunkModal(true);
   };
 
@@ -2130,9 +2157,33 @@ export function MockExamParser() {
                 <p className="text-sm text-gray-600 mb-2">
                   <span className="font-medium">{chunkTargetItem.filename}</span>
                 </p>
-                <p className="text-sm text-gray-500">
+                <p className="text-sm text-gray-500 mb-2">
                   총 {chunkTargetItem.total_questions || '?'}개 문항 중 특정 범위만 재분석합니다.
                 </p>
+
+                {/* 분석 현황 정보 */}
+                {chunkAnalysisInfo && (
+                  <div className="bg-gray-50 rounded-lg p-3 text-sm">
+                    <div className="flex justify-between mb-1">
+                      <span className="text-gray-600">분석 완료:</span>
+                      <span className="font-medium text-green-600">{chunkAnalysisInfo.analyzedNumbers.length}개 문항</span>
+                    </div>
+                    <div className="flex justify-between mb-1">
+                      <span className="text-gray-600">분석된 범위:</span>
+                      <span className="font-medium">
+                        {chunkAnalysisInfo.analyzedNumbers.length > 0
+                          ? `1 ~ ${chunkAnalysisInfo.maxNumber}번`
+                          : '없음'}
+                      </span>
+                    </div>
+                    {chunkTargetItem.total_questions && chunkAnalysisInfo.maxNumber < chunkTargetItem.total_questions && (
+                      <div className="flex justify-between text-orange-600">
+                        <span>미분석 범위:</span>
+                        <span className="font-medium">{chunkAnalysisInfo.maxNumber + 1} ~ {chunkTargetItem.total_questions}번</span>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
 
               <div className="flex items-center gap-3 mb-6">
