@@ -515,7 +515,7 @@ export function MockExamParser() {
     const headers = [
       '유형 1', '유형 2', '유형 3', '출제년도', '출제월', '출제학년',
       '출제교육청', '출제번호', '문제번호', '문제', '문제지문',
-      '선지1', '선지2', '선지3', '선지4', '선지5', '정답', '모범해석', '이미지URL'
+      '선지1', '선지2', '선지3', '선지4', '선지5', '정답', '모범해석', '이미지URL', '파일명'
     ];
 
     const rows = dataToExport.map(q => [
@@ -537,7 +537,8 @@ export function MockExamParser() {
       q.choice_5,
       q.correct_answer,
       q.model_translation,
-      q.image_path ? `${supabase.storage.from(IMAGE_BUCKET).getPublicUrl(q.image_path).data.publicUrl}` : ''
+      q.image_path ? `${supabase.storage.from(IMAGE_BUCKET).getPublicUrl(q.image_path).data.publicUrl}` : '',
+      q.pdf_filename || ''
     ]);
 
     const escapeCSV = (value: any) => {
