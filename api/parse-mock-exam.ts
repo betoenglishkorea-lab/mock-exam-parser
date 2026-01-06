@@ -337,6 +337,24 @@ passage: "To find the answer to this question, they can build a simple experimen
 ### 예시
 passage: "Newborn babies cry rather less than older babies. But even a small amount of crying can be quite worrying particularly to new parents.\\n\\n(A) For them, it may be helpful to know that crying makes the baby's lungs stronger, or sends oxygen to his blood.\\n\\n(B) More importantly, crying is your baby's main form of communication. When he cries, you need to respond quickly and find out what is wrong.\\n\\n(C) However, this does not mean that it is good to leave a baby to 'cry it out.' Crying is hard on a baby, and it uses up his limited energy."
 
+## 요약문 완성 문제 처리 규칙
+
+### 감지 방법
+- "다음 글의 내용을 한 문장으로 요약하고자 한다", "빈칸 (A), (B)에 들어갈 말" 등의 표현
+
+### 구조
+1. 본문 지문
+2. ↓ (화살표)
+3. 요약문 (빈칸 포함)
+
+### 처리 규칙
+- **본문 지문**과 **요약문**을 모두 passage에 포함
+- 형식: [본문 지문] + 줄바꿈(\\n\\n↓\\n\\n) + [요약문]
+- (A), (B) 빈칸은 ________로 표시
+
+### 예시
+passage: "Even those with average talent can produce notable work in the various sciences, so long as they do not try to embrace all of them at once. Instead, they should concentrate attention on one subject after another...\\n*condense: 응축하다 **cerebral: 대뇌의\\n\\n↓\\n\\nExploring one scientific subject after another (A)________ remarkable work across the sciences, as the previously gained knowledge is retained in simplified forms within the brain, which (B)________ room for new learning."
+
 ## 중요
 - 정답은 PDF 하단의 정답표에서 각주번호로 매칭
 - 해석은 PDF 하단의 해석 섹션에서 각주번호로 매칭
