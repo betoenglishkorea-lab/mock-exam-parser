@@ -344,12 +344,36 @@ export default async function handler(req: Request) {
             message: `청크 ${chunkIndex + 1}/${totalChunks} 처리 중 (문항 ${startNum}~${endNum})...`
           });
 
+          // PDF 텍스트를 청크 범위에 맞게 분할
+          // 문항 번호 패턴으로 분할 시도
+          let chunkPdfText = pdfText;
+
+          // 전체 텍스트가 너무 크면 분할 시도 (약 100k 토큰 = 400k 문자 기준)
+          if (pdfText.length > 300000) {
+            // 시작 문항과 끝 문항+여유분 사이의 텍스트만 추출
+            const startPattern = new RegExp(`(?:^|\\n)\\s*${startNum}\\s*[.)]`, 'm');
+            const endPattern = new RegExp(`(?:^|\\n)\\s*${Math.min(endNum + 5, expectedQuestions)}\\s*[.)]`, 'm');
+
+            const startMatch = pdfText.match(startPattern);
+            const endMatch = pdfText.match(endPattern);
+
+            if (startMatch && startMatch.index !== undefined) {
+              const startIdx = Math.max(0, startMatch.index - 500); // 약간의 컨텍스트 포함
+              const endIdx = endMatch && endMatch.index !== undefined
+                ? Math.min(pdfText.length, endMatch.index + 5000)
+                : Math.min(pdfText.length, startMatch.index + 50000);
+
+              chunkPdfText = pdfText.substring(startIdx, endIdx);
+              console.log(`[${filename}] 청크 ${chunkIndex + 1}: 텍스트 분할 ${pdfText.length} -> ${chunkPdfText.length} 문자`);
+            }
+          }
+
           // 파일명에서 유형 힌트 생성
           let userContent = `## 파일명 (유형 힌트)
 ${filename}
 
 ## PDF 텍스트
-${pdfText}
+${chunkPdfText}
 
 ## 중요: 부분 추출 모드
 이 PDF에는 총 ${expectedQuestions}개의 문항이 있습니다.
@@ -357,9 +381,10 @@ ${pdfText}
 다른 문항은 무시하고, 해당 범위의 문항만 정확하게 추출해주세요.`;
 
           // 스트리밍 모드로 Claude API 호출
+          // max_tokens를 줄여서 컨텍스트 제한(200k) 내에서 처리
           const apiStream = anthropic.messages.stream({
             model: 'claude-sonnet-4-20250514',
-            max_tokens: 64000,
+            max_tokens: 16000,
             system: [
               {
                 type: 'text',
