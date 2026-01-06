@@ -777,15 +777,15 @@ export function MockExamParser() {
               const data = JSON.parse(line.slice(6));
               console.log('SSE 데이터:', data);
 
-              if (data.type === 'complete') {
+              if (data.type === 'complete' || data.success === true) {
                 completed = true;
                 await fetchQueue();
                 await fetchQuestions();
                 alert(`${chunkRange.start}번 ~ ${chunkRange.end}번 문항 재분석 완료!\n${data.questionsCount}개 문항이 추출되었습니다.`);
-              } else if (data.type === 'error') {
-                throw new Error(data.message);
-              } else if (data.type === 'progress') {
-                console.log(`진행: 청크 ${data.currentChunk}/${data.totalChunks}`);
+              } else if (data.type === 'error' || data.success === false) {
+                throw new Error(data.message || '알 수 없는 오류');
+              } else if (data.type === 'progress' || data.step) {
+                console.log(`진행: ${data.message || `청크 ${data.currentChunk}/${data.totalChunks}`}`);
               }
             } catch (e) {
               if (e instanceof Error && e.message.includes('API')) {
