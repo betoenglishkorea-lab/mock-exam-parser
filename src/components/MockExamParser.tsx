@@ -100,6 +100,50 @@ interface MockExamQuestion {
   created_at?: string;
 }
 
+// 고정된 유형 목록
+const TYPE3_LIST = [
+  '글의 목적',
+  '감정/심경/분위기',
+  '지칭추론',
+  '실용문, 내용일치',
+  '도표',
+  '주제',
+  '제목',
+  '요지, 주장',
+  '요약문 완성',
+  '함의추론',
+  '짧은 빈칸추론',
+  '긴 빈칸추론',
+  '접속사/연결사',
+  '무관한 문장',
+  '글의 순서',
+  '문장 삽입',
+  '장문독해',
+  '어법',
+  '어휘',
+  '어휘 영영풀이'
+];
+
+const TYPE1_LIST = ['내용추론', '대의추론', '빈칸추론', '논리추론', '어법', '어휘'];
+
+const TYPE2_LIST = [
+  '글의 목적',
+  '감정/심경/분위기',
+  '지칭추론',
+  '내용일치/불일치',
+  '도표',
+  '주제/제목/요지',
+  '요약문 완성',
+  '함의추론',
+  '빈칸추론',
+  '접속사/연결사',
+  '글의흐름(순서/삽입/무관)',
+  '장문독해',
+  '어법',
+  '어휘',
+  '어휘영영풀이'
+];
+
 export function MockExamParser() {
   // URL 파라미터 읽기
   const urlParams = new URLSearchParams(window.location.search);
@@ -2381,7 +2425,7 @@ export function MockExamParser() {
                       className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
                     >
                       <option value="">선택</option>
-                      {filterOptions.type1List.map(t => (
+                      {TYPE1_LIST.map(t => (
                         <option key={t} value={t}>{t}</option>
                       ))}
                     </select>
@@ -2394,7 +2438,7 @@ export function MockExamParser() {
                       className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
                     >
                       <option value="">선택</option>
-                      {filterOptions.type2List.map(t => (
+                      {TYPE2_LIST.map(t => (
                         <option key={t} value={t}>{t}</option>
                       ))}
                     </select>
@@ -2407,7 +2451,7 @@ export function MockExamParser() {
                       className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
                     >
                       <option value="">선택</option>
-                      {filterOptions.type3List.map(t => (
+                      {TYPE3_LIST.map(t => (
                         <option key={t} value={t}>{t}</option>
                       ))}
                     </select>
