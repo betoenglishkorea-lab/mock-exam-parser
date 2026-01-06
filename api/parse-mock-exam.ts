@@ -252,8 +252,14 @@ PDF 텍스트 추출 시 밑줄 정보가 손실되므로, 문제 지시문을 �
 - 꺾쇠괄호 <내용> → (내용)
 - PDF 열 폭 줄바꿈 → 제거하여 문장 연결
 - 의도된 문단 구분 → 유지
-- 단어 설명 (*단어: 뜻 형식) → 지문 마지막에 줄바꿈(\\n) 후 별도 줄로 유지
-  예: "... the end of passage.\\n*consensus: 합의 **coercion: 강압"
+
+### 단어 해석 처리 (필수)
+- * 또는 **로 시작하는 단어 해석은 지문 가장 마지막에 줄바꿈(\\n) 후 별도 줄로 배치
+- 형식: [지문 본문]\\n*단어1: 뜻1 **단어2: 뜻2
+- 예시:
+  - 지문: "The consensus among scientists was clear, but coercion was not the answer."
+  - 단어 해석: *consensus: 합의 **coercion: 강압
+  - 결과: "The consensus among scientists was clear, but coercion was not the answer.\\n*consensus: 합의 **coercion: 강압"
 
 ## 연계문제 처리 규칙 (장문독해 포함)
 
