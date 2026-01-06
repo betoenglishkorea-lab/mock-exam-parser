@@ -677,8 +677,15 @@ export function MockExamParser() {
 
   // 청크 재분석 실행
   const reanalyzeChunk = async () => {
-    if (!chunkTargetItem || !chunkTargetItem.storage_path) {
+    console.log('reanalyzeChunk 호출됨', { chunkTargetItem, chunkRange });
+
+    if (!chunkTargetItem) {
       alert('파일 정보가 없습니다.');
+      return;
+    }
+
+    if (!chunkTargetItem.storage_path) {
+      alert('Storage 경로가 없습니다. 파일을 다시 업로드해주세요.');
       return;
     }
 
