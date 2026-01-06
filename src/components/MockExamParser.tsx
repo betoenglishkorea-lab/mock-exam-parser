@@ -199,7 +199,11 @@ export function MockExamParser() {
   const [showChunkModal, setShowChunkModal] = useState(false);
   const [chunkTargetItem, setChunkTargetItem] = useState<PdfQueueItem | null>(null);
   const [chunkRange, setChunkRange] = useState({ start: 1, end: 10 });
-  const [chunkAnalysisInfo, setChunkAnalysisInfo] = useState<{ analyzedNumbers: number[], maxNumber: number } | null>(null);
+  const [chunkAnalysisInfo, setChunkAnalysisInfo] = useState<{
+    analyzedNumbers: number[],
+    maxNumber: number,
+    missingNumbers: number[]  // 빠진 문항 번호들
+  } | null>(null);
 
   // 통계
   const [stats, setStats] = useState({
@@ -724,20 +728,36 @@ export function MockExamParser() {
         .order('question_number', { ascending: true });
 
       if (questions && questions.length > 0) {
-        const numbers = questions.map(q => q.question_number);
+        const numbers = questions.map(q => q.question_number).filter(n => n != null);
         const maxNum = Math.max(...numbers);
-        setChunkAnalysisInfo({ analyzedNumbers: numbers, maxNumber: maxNum });
+        const totalExpected = item.total_questions || maxNum;
 
-        // 실패 상태일 경우 다음 번호부터 시작하도록 설정
-        if (item.status === 'failed') {
+        // 빠진 문항 번호 계산 (1부터 totalExpected까지 중 없는 번호)
+        const numberSet = new Set(numbers);
+        const missingNumbers: number[] = [];
+        for (let i = 1; i <= totalExpected; i++) {
+          if (!numberSet.has(i)) {
+            missingNumbers.push(i);
+          }
+        }
+
+        setChunkAnalysisInfo({ analyzedNumbers: numbers, maxNumber: maxNum, missingNumbers });
+
+        // 빠진 문항이 있으면 첫 번째 빠진 문항부터 시작하도록 설정
+        if (missingNumbers.length > 0) {
+          const firstMissing = missingNumbers[0];
+          const lastConsecutive = missingNumbers.find((n, i) => i === missingNumbers.length - 1 || missingNumbers[i + 1] !== n + 1) || firstMissing;
+          setChunkRange({ start: firstMissing, end: Math.min(lastConsecutive, firstMissing + 9) });
+        } else if (item.status === 'failed') {
+          // 실패 상태일 경우 다음 번호부터 시작하도록 설정
           setChunkRange({ start: maxNum + 1, end: Math.min(maxNum + 10, item.total_questions || maxNum + 10) });
         }
       } else {
-        setChunkAnalysisInfo({ analyzedNumbers: [], maxNumber: 0 });
+        setChunkAnalysisInfo({ analyzedNumbers: [], maxNumber: 0, missingNumbers: [] });
       }
     } catch (err) {
       console.error('문항 정보 조회 실패:', err);
-      setChunkAnalysisInfo({ analyzedNumbers: [], maxNumber: 0 });
+      setChunkAnalysisInfo({ analyzedNumbers: [], maxNumber: 0, missingNumbers: [] });
     }
   };
 
@@ -936,6 +956,195 @@ export function MockExamParser() {
       console.error(`[${chunkTargetItem.filename}] 부분 재분석 오류:`, error);
       alert(`재분석 실패: ${error instanceof Error ? error.message : String(error)}`);
       // 실패해도 데이터 새로고침
+      await fetchQueue();
+      await fetchQuestions();
+    } finally {
+      setProcessing(false);
+      setChunkTargetItem(null);
+    }
+  };
+
+  // 빠진 문항만 재분석
+  const reanalyzeMissingQuestions = async () => {
+    if (!chunkTargetItem || !chunkAnalysisInfo) {
+      alert('파일 정보가 없습니다.');
+      return;
+    }
+
+    const { missingNumbers } = chunkAnalysisInfo;
+    if (missingNumbers.length === 0) {
+      alert('빠진 문항이 없습니다.');
+      return;
+    }
+
+    if (!chunkTargetItem.storage_path) {
+      alert('Storage 경로가 없습니다. 파일을 다시 업로드해주세요.');
+      return;
+    }
+
+    // 연속된 구간으로 그룹화
+    const ranges: { start: number; end: number }[] = [];
+    let rangeStart = missingNumbers[0];
+    let rangeEnd = missingNumbers[0];
+
+    for (let i = 1; i < missingNumbers.length; i++) {
+      if (missingNumbers[i] === rangeEnd + 1) {
+        rangeEnd = missingNumbers[i];
+      } else {
+        ranges.push({ start: rangeStart, end: rangeEnd });
+        rangeStart = missingNumbers[i];
+        rangeEnd = missingNumbers[i];
+      }
+    }
+    ranges.push({ start: rangeStart, end: rangeEnd });
+
+    const rangeStr = ranges.map(r => r.start === r.end ? `${r.start}번` : `${r.start}~${r.end}번`).join(', ');
+
+    if (!confirm(`빠진 문항 ${missingNumbers.length}개를 재분석합니다.\n\n대상: ${rangeStr}\n\n계속하시겠습니까?`)) {
+      return;
+    }
+
+    console.log(`\n========================================`);
+    console.log(`[${chunkTargetItem.filename}] 빠진 문항 재분석 시작`);
+    console.log(`========================================`);
+    console.log(`[${chunkTargetItem.filename}] 빠진 문항: ${missingNumbers.join(', ')}`);
+    console.log(`[${chunkTargetItem.filename}] 총 ${missingNumbers.length}개 문항, ${ranges.length}개 구간`);
+
+    setShowChunkModal(false);
+    setProcessing(true);
+
+    try {
+      // Storage에서 PDF 다운로드
+      console.log(`[${chunkTargetItem.filename}] PDF 파일 다운로드 중...`);
+      const arrayBuffer = await getPdfFromStorage(chunkTargetItem.storage_path);
+      if (!arrayBuffer) {
+        throw new Error('Storage에서 파일을 찾을 수 없습니다.');
+      }
+      console.log(`[${chunkTargetItem.filename}] PDF 다운로드 완료 (${Math.round(arrayBuffer.byteLength / 1024)}KB)`);
+
+      console.log(`[${chunkTargetItem.filename}] 텍스트 추출 중...`);
+      const pdfText = await extractTextFromArrayBuffer(arrayBuffer);
+      console.log(`[${chunkTargetItem.filename}] 텍스트 추출 완료 (${pdfText.length.toLocaleString()}자)`);
+
+      let totalExtracted = 0;
+
+      // 각 구간별로 처리
+      for (let rangeIdx = 0; rangeIdx < ranges.length; rangeIdx++) {
+        const range = ranges[rangeIdx];
+        const questionsInRange = range.end - range.start + 1;
+
+        console.log(`\n[${chunkTargetItem.filename}] ----------------------------------------`);
+        console.log(`[${chunkTargetItem.filename}] 구간 ${rangeIdx + 1}/${ranges.length} 처리 시작`);
+        console.log(`[${chunkTargetItem.filename}] 범위: ${range.start}번 ~ ${range.end}번 (${questionsInRange}문항)`);
+        console.log(`[${chunkTargetItem.filename}] API 호출 중...`);
+
+        // API 호출 (특정 범위만 분석)
+        const response = await fetch('/api/parse-mock-exam', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            queueId: chunkTargetItem.id,
+            pdfText,
+            filename: chunkTargetItem.filename,
+            extractedType3: chunkTargetItem.extracted_type3,
+            expectedQuestions: chunkTargetItem.total_questions || chunkTargetItem.expected_questions,
+            chunkStart: range.start,
+            chunkEnd: range.end,
+            isChunkReanalyze: true,
+            isMissingOnly: true  // 빠진 문항만 분석하는 플래그
+          })
+        });
+
+        console.log(`[${chunkTargetItem.filename}] 구간 ${rangeIdx + 1} API 응답: ${response.status}`);
+
+        if (!response.ok) {
+          const errorText = await response.text();
+          throw new Error(`API 오류 (${response.status}): ${errorText}`);
+        }
+
+        // SSE 스트림 처리
+        console.log(`[${chunkTargetItem.filename}] 구간 ${rangeIdx + 1} SSE 스트림 처리 시작...`);
+        const reader = response.body?.getReader();
+        const decoder = new TextDecoder();
+
+        if (!reader) {
+          throw new Error('응답 스트림을 읽을 수 없습니다.');
+        }
+
+        let buffer = '';
+        let rangeExtracted = 0;
+        let lastHeartbeatLog = 0;
+
+        const processLine = async (line: string) => {
+          if (line.startsWith('data: ')) {
+            try {
+              const data = JSON.parse(line.slice(6));
+
+              if (data.type === 'heartbeat') {
+                const now = Date.now();
+                if (now - lastHeartbeatLog > 5000) {
+                  console.log(`[${chunkTargetItem.filename}] 구간 ${rangeIdx + 1}/${ranges.length} heartbeat: AI 응답 수신 중 (${data.chars?.toLocaleString() || 0}자)`);
+                  lastHeartbeatLog = now;
+                }
+              } else if (data.type === 'complete' || data.success === true) {
+                rangeExtracted = data.questionsCount || 0;
+                totalExtracted += rangeExtracted;
+                console.log(`[${chunkTargetItem.filename}] 구간 ${rangeIdx + 1}/${ranges.length} complete: ${rangeExtracted}개 문항 추출`);
+              } else if (data.type === 'error' || data.success === false) {
+                console.error(`[${chunkTargetItem.filename}] 구간 ${rangeIdx + 1}/${ranges.length} error:`, data.message);
+                throw new Error(data.message || '알 수 없는 오류');
+              } else if (data.type === 'progress' || data.step) {
+                console.log(`[${chunkTargetItem.filename}] 구간 ${rangeIdx + 1}/${ranges.length} progress: ${data.message}`);
+              }
+            } catch (e) {
+              if (e instanceof Error && (e.message.includes('API') || e.message.includes('오류'))) {
+                throw e;
+              }
+            }
+          }
+        };
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop() || '';
+
+          for (const line of lines) {
+            await processLine(line);
+          }
+        }
+
+        if (buffer.trim()) {
+          await processLine(buffer);
+        }
+
+        console.log(`[${chunkTargetItem.filename}] 구간 ${rangeIdx + 1}/${ranges.length} 처리 완료 ✓`);
+        console.log(`[${chunkTargetItem.filename}] 현재까지 총 ${totalExtracted}개 문항 추출됨`);
+
+        // 구간 사이 딜레이
+        if (rangeIdx < ranges.length - 1) {
+          console.log(`[${chunkTargetItem.filename}] 다음 구간 처리 전 2초 대기...`);
+          await new Promise(resolve => setTimeout(resolve, 2000));
+        }
+      }
+
+      // 모든 구간 완료
+      console.log(`\n========================================`);
+      console.log(`[${chunkTargetItem.filename}] 빠진 문항 재분석 완료!`);
+      console.log(`[${chunkTargetItem.filename}] 대상: ${rangeStr}`);
+      console.log(`[${chunkTargetItem.filename}] 총 추출 문항: ${totalExtracted}개`);
+      console.log(`========================================\n`);
+
+      await fetchQueue();
+      await fetchQuestions();
+      alert(`빠진 문항 재분석 완료!\n대상: ${rangeStr}\n총 ${totalExtracted}개 문항이 추출되었습니다.`);
+
+    } catch (error) {
+      console.error(`[${chunkTargetItem.filename}] 빠진 문항 재분석 오류:`, error);
+      alert(`재분석 실패: ${error instanceof Error ? error.message : String(error)}`);
       await fetchQueue();
       await fetchQuestions();
     } finally {
@@ -2401,6 +2610,28 @@ export function MockExamParser() {
                       <div className="flex justify-between text-orange-600">
                         <span>미분석 범위:</span>
                         <span className="font-medium">{chunkAnalysisInfo.maxNumber + 1} ~ {chunkTargetItem.total_questions}번</span>
+                      </div>
+                    )}
+                    {/* 빠진 문항 표시 */}
+                    {chunkAnalysisInfo.missingNumbers.length > 0 && (
+                      <div className="mt-2 pt-2 border-t border-gray-200">
+                        <div className="flex justify-between items-center text-red-600 mb-1">
+                          <span>빠진 문항:</span>
+                          <span className="font-medium">{chunkAnalysisInfo.missingNumbers.length}개</span>
+                        </div>
+                        <div className="text-xs text-red-500 bg-red-50 rounded p-2 max-h-20 overflow-y-auto">
+                          {chunkAnalysisInfo.missingNumbers.length <= 20
+                            ? chunkAnalysisInfo.missingNumbers.join(', ') + '번'
+                            : `${chunkAnalysisInfo.missingNumbers.slice(0, 20).join(', ')}번 외 ${chunkAnalysisInfo.missingNumbers.length - 20}개`
+                          }
+                        </div>
+                        <button
+                          onClick={reanalyzeMissingQuestions}
+                          disabled={processing}
+                          className="mt-2 w-full py-2 bg-red-600 text-white text-sm rounded-lg hover:bg-red-700 disabled:opacity-50"
+                        >
+                          빠진 문항만 재분석 ({chunkAnalysisInfo.missingNumbers.length}개)
+                        </button>
                       </div>
                     )}
                   </div>
