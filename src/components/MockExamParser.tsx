@@ -1563,13 +1563,13 @@ export function MockExamParser() {
                   <tbody className="divide-y divide-gray-200">
                     {filteredQuestions.map(q => (
                       <tr key={q.id} className="hover:bg-gray-50">
-                        <td className="px-3 py-2">
+                        <td className="px-3 py-2 min-w-[300px]">
                           <div
-                            className="text-xs text-blue-600 hover:text-blue-800 truncate max-w-[150px] cursor-pointer"
+                            className="text-xs text-blue-600 hover:text-blue-800 cursor-pointer whitespace-normal break-words"
                             title={`${q.pdf_filename} (클릭하여 PDF 열기)`}
                             onClick={() => q.pdf_filename && openPdfFile(q.pdf_filename)}
                           >
-                            {q.pdf_filename?.replace(/\.pdf$/i, '').slice(0, 20)}...
+                            {q.pdf_filename?.replace(/\.pdf$/i, '')}
                           </div>
                         </td>
                         <td className="px-3 py-2 text-center">
@@ -1806,18 +1806,54 @@ export function MockExamParser() {
           <div className="bg-white rounded-lg max-w-4xl w-full max-h-[90vh] overflow-y-auto">
             <div className="p-6">
               <div className="flex justify-between items-start mb-4">
-                <h3 className="text-lg font-medium text-gray-900">문제 수정</h3>
-                <button
-                  onClick={() => {
-                    setShowEditModal(false);
-                    setEditingQuestion(null);
-                  }}
-                  className="text-gray-400 hover:text-gray-600"
-                >
-                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                  </svg>
-                </button>
+                <div className="flex items-center gap-4">
+                  <h3 className="text-lg font-medium text-gray-900">문제 수정</h3>
+                  <span className="px-3 py-1 bg-blue-100 text-blue-800 rounded-full text-sm font-medium">
+                    #{editingQuestion.question_number}
+                  </span>
+                  <span className="text-sm text-gray-500">
+                    {editingQuestion.pdf_filename?.replace(/\.pdf$/i, '')}
+                  </span>
+                </div>
+                <div className="flex items-center gap-2">
+                  {/* 이전 문항 버튼 */}
+                  <button
+                    onClick={() => {
+                      const currentIndex = filteredQuestions.findIndex(q => q.id === editingQuestion.id);
+                      if (currentIndex > 0) {
+                        setEditingQuestion({ ...filteredQuestions[currentIndex - 1] });
+                      }
+                    }}
+                    disabled={filteredQuestions.findIndex(q => q.id === editingQuestion.id) === 0}
+                    className="px-3 py-1 text-sm border border-gray-300 rounded-lg hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    ← 이전
+                  </button>
+                  {/* 다음 문항 버튼 */}
+                  <button
+                    onClick={() => {
+                      const currentIndex = filteredQuestions.findIndex(q => q.id === editingQuestion.id);
+                      if (currentIndex < filteredQuestions.length - 1) {
+                        setEditingQuestion({ ...filteredQuestions[currentIndex + 1] });
+                      }
+                    }}
+                    disabled={filteredQuestions.findIndex(q => q.id === editingQuestion.id) === filteredQuestions.length - 1}
+                    className="px-3 py-1 text-sm border border-gray-300 rounded-lg hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    다음 →
+                  </button>
+                  <button
+                    onClick={() => {
+                      setShowEditModal(false);
+                      setEditingQuestion(null);
+                    }}
+                    className="text-gray-400 hover:text-gray-600 ml-2"
+                  >
+                    <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                  </button>
+                </div>
               </div>
 
               <div className="space-y-4">
