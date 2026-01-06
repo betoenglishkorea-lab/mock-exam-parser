@@ -509,14 +509,30 @@ ${chunkPdfText}
             });
 
             let fullResponse = '';
+            let lastProgressTime = Date.now();
+            let chunkCount = 0;
+
             for await (const event of apiStream) {
               if (event.type === 'content_block_delta') {
                 const delta = event.delta as { type: string; text?: string };
                 if (delta.type === 'text_delta' && delta.text) {
                   fullResponse += delta.text;
+                  chunkCount++;
+
+                  // 10초마다 또는 100청크마다 진행 상황 전송 (연결 유지)
+                  const now = Date.now();
+                  if (now - lastProgressTime > 10000 || chunkCount % 100 === 0) {
+                    sendEvent('progress', {
+                      step: 2,
+                      message: `AI 응답 수신 중... (${Math.round(fullResponse.length / 1000)}KB)`,
+                    });
+                    lastProgressTime = now;
+                  }
                 }
               }
             }
+
+            console.log(`부분재분석: Claude 응답 완료 (${fullResponse.length}자)`);
 
             // JSON 추출 및 파싱
             const jsonMatch = fullResponse.match(/\[[\s\S]*\]/);
