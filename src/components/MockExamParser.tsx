@@ -643,8 +643,11 @@ export function MockExamParser() {
 
   // 청크 재분석 모달 열기
   const openChunkReanalyzeModal = async (item: PdfQueueItem) => {
+    // 먼저 모달을 열고 기본값 설정
     setChunkTargetItem(item);
     setChunkRange({ start: 1, end: Math.min(10, item.total_questions || 10) });
+    setChunkAnalysisInfo(null); // 로딩 상태 표시
+    setShowChunkModal(true);
 
     // DB에서 현재 분석된 문항 번호 조회
     try {
@@ -668,10 +671,8 @@ export function MockExamParser() {
       }
     } catch (err) {
       console.error('문항 정보 조회 실패:', err);
-      setChunkAnalysisInfo(null);
+      setChunkAnalysisInfo({ analyzedNumbers: [], maxNumber: 0 });
     }
-
-    setShowChunkModal(true);
   };
 
   // 청크 재분석 실행
