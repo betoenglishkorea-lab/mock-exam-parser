@@ -193,15 +193,37 @@ export function MockExamParser() {
     }));
   }, []);
 
-  // 문제 목록 조회
+  // 문제 목록 조회 (전체 데이터 페이지네이션)
   const fetchQuestions = useCallback(async () => {
-    const { data } = await supabase
-      .from('mock_exam_questions')
-      .select('*')
-      .order('pdf_filename', { ascending: true })
-      .order('question_number', { ascending: true });
+    const allData: MockExamQuestion[] = [];
+    const pageSize = 1000;
+    let from = 0;
+    let hasMore = true;
 
-    if (data) {
+    while (hasMore) {
+      const { data: pageData, error } = await supabase
+        .from('mock_exam_questions')
+        .select('*')
+        .order('pdf_filename', { ascending: true })
+        .order('question_number', { ascending: true })
+        .range(from, from + pageSize - 1);
+
+      if (error) {
+        console.error('문항 조회 오류:', error);
+        break;
+      }
+
+      if (pageData && pageData.length > 0) {
+        allData.push(...pageData);
+        from += pageSize;
+        hasMore = pageData.length === pageSize;
+      } else {
+        hasMore = false;
+      }
+    }
+
+    const data = allData;
+    if (data.length > 0) {
       setQuestions(data);
       setFilteredQuestions(data);
 
