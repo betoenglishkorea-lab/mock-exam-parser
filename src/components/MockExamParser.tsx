@@ -564,6 +564,78 @@ export function MockExamParser() {
     URL.revokeObjectURL(url);
   };
 
+  // 전체 문항 CSV 다운로드
+  const downloadAllCSV = async () => {
+    // DB에서 모든 문항 조회
+    const { data: allQuestions, error } = await supabase
+      .from('mock_exam_questions')
+      .select('*')
+      .order('pdf_filename', { ascending: true })
+      .order('question_number', { ascending: true });
+
+    if (error) {
+      console.error('전체 문항 조회 오류:', error);
+      alert('전체 문항 조회에 실패했습니다.');
+      return;
+    }
+
+    if (!allQuestions || allQuestions.length === 0) {
+      alert('다운로드할 데이터가 없습니다.');
+      return;
+    }
+
+    const headers = [
+      '유형 1', '유형 2', '유형 3', '출제년도', '출제월', '출제학년',
+      '출제교육청', '출제번호', '문제번호', '문제', '문제지문',
+      '선지1', '선지2', '선지3', '선지4', '선지5', '정답', '모범해석', '이미지URL', '파일명'
+    ];
+
+    const rows = allQuestions.map(q => [
+      q.type1,
+      q.type2,
+      q.type3,
+      q.source_year,
+      q.source_month,
+      q.source_grade,
+      q.source_org,
+      q.source_number,
+      q.question_number,
+      q.question_text,
+      q.passage,
+      q.choice_1,
+      q.choice_2,
+      q.choice_3,
+      q.choice_4,
+      q.choice_5,
+      q.correct_answer,
+      q.model_translation,
+      q.image_path ? `${supabase.storage.from(IMAGE_BUCKET).getPublicUrl(q.image_path).data.publicUrl}` : '',
+      q.pdf_filename || ''
+    ]);
+
+    const escapeCSV = (value: any) => {
+      if (value === null || value === undefined) return '';
+      const str = String(value);
+      if (str.includes(',') || str.includes('"') || str.includes('\n')) {
+        return `"${str.replace(/"/g, '""')}"`;
+      }
+      return str;
+    };
+
+    const csvContent = [
+      headers.join(','),
+      ...rows.map(row => row.map(escapeCSV).join(','))
+    ].join('\n');
+
+    const blob = new Blob(['\uFEFF' + csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `mock_exam_all_questions_${new Date().toISOString().split('T')[0]}.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+
   // 큐 아이템 삭제
   const deleteQueueItem = async (id: string, storagePath?: string) => {
     if (!confirm('이 항목을 삭제하시겠습니까?')) return;
@@ -1831,6 +1903,16 @@ export function MockExamParser() {
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
                 </svg>
                 CSV 다운로드 {filteredQuestions.length > 0 && filteredQuestions.length !== questions.length && `(${filteredQuestions.length})`}
+              </button>
+              <button
+                onClick={downloadAllCSV}
+                disabled={stats.totalQuestions === 0}
+                className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed flex items-center gap-2"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                </svg>
+                전체 다운로드 ({stats.totalQuestions})
               </button>
             </div>
           </div>
