@@ -467,7 +467,7 @@ ${chunkPdfText}
             // Claude API 호출
             const apiStream = anthropic.messages.stream({
               model: 'claude-sonnet-4-20250514',
-              max_tokens: 16000,
+              max_tokens: 32000,
               system: [
                 {
                   type: 'text',
@@ -662,10 +662,9 @@ ${chunkPdfText}
 다른 문항은 무시하고, 해당 범위의 문항만 정확하게 추출해주세요.`;
 
           // 스트리밍 모드로 Claude API 호출
-          // max_tokens를 줄여서 컨텍스트 제한(200k) 내에서 처리
           const apiStream = anthropic.messages.stream({
             model: 'claude-sonnet-4-20250514',
-            max_tokens: 16000,
+            max_tokens: 32000,
             system: [
               {
                 type: 'text',
