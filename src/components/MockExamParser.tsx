@@ -223,22 +223,23 @@ export function MockExamParser() {
       .limit(100);
 
     if (queueData) {
-      // 각 파일별 실제 DB 문항 수 조회 (RPC 또는 개별 count 쿼리)
+      // 파일별 문항 수를 RPC 함수로 한 번에 조회
+      const filenames = queueData
+        .filter(q => q.status === 'completed' || q.status === 'warning' || q.status === 'failed' || q.status === 'processing')
+        .map(q => q.filename);
+
       const countMap: Record<string, number> = {};
 
-      // 완료/경고/실패 상태인 파일들만 카운트 조회 (성능 최적화)
-      const filesToCount = queueData.filter(q =>
-        q.status === 'completed' || q.status === 'warning' || q.status === 'failed' || q.status === 'processing'
-      );
+      if (filenames.length > 0) {
+        const { data: countData } = await supabase
+          .rpc('get_question_counts_by_filename', { filenames });
 
-      // 병렬로 각 파일의 문항 수 조회
-      await Promise.all(filesToCount.map(async (q) => {
-        const { count } = await supabase
-          .from('mock_exam_questions')
-          .select('*', { count: 'exact', head: true })
-          .eq('pdf_filename', q.filename);
-        countMap[q.filename] = count || 0;
-      }));
+        if (countData) {
+          countData.forEach((row: { pdf_filename: string; question_count: number }) => {
+            countMap[row.pdf_filename] = row.question_count;
+          });
+        }
+      }
 
       // 큐 데이터에 실제 문항 수 추가
       const queueWithActualCounts = queueData.map(q => ({
@@ -364,9 +365,12 @@ export function MockExamParser() {
 
   useEffect(() => {
     fetchQueue();
-    const interval = setInterval(fetchQueue, 5000);
-    return () => clearInterval(interval);
-  }, [fetchQueue]);
+    // 시험관리 탭에서만 폴링 (10초 간격)
+    if (mainTab === 'exams') {
+      const interval = setInterval(fetchQueue, 10000);
+      return () => clearInterval(interval);
+    }
+  }, [fetchQueue, mainTab]);
 
   // 문항 관리 탭 진입 시 필터 옵션만 로딩
   useEffect(() => {
