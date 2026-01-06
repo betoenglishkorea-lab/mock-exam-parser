@@ -1574,7 +1574,7 @@ export function MockExamParser() {
                               <>
                                 <button
                                   onClick={() => {
-                                    setFilters(prev => ({ ...prev, pdf_filename: item.filename }));
+                                    setFilters(prev => ({ ...prev, pdfFilename: item.filename }));
                                     setMainTab('questions');
                                   }}
                                   className="text-blue-600 hover:text-blue-800 text-sm font-medium"
