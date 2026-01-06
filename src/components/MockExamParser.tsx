@@ -2157,13 +2157,14 @@ export function MockExamParser() {
                 <p className="text-sm text-gray-600 mb-2">
                   <span className="font-medium">{chunkTargetItem.filename}</span>
                 </p>
-                <p className="text-sm text-gray-500 mb-2">
-                  총 {chunkTargetItem.total_questions || '?'}개 문항 중 특정 범위만 재분석합니다.
-                </p>
 
                 {/* 분석 현황 정보 */}
                 {chunkAnalysisInfo && (
                   <div className="bg-gray-50 rounded-lg p-3 text-sm">
+                    <div className="flex justify-between mb-1">
+                      <span className="text-gray-600">총 문항수:</span>
+                      <span className="font-medium">{chunkTargetItem.total_questions || chunkAnalysisInfo.maxNumber || '?'}개</span>
+                    </div>
                     <div className="flex justify-between mb-1">
                       <span className="text-gray-600">분석 완료:</span>
                       <span className="font-medium text-green-600">{chunkAnalysisInfo.analyzedNumbers.length}개 문항</span>
@@ -2183,6 +2184,11 @@ export function MockExamParser() {
                       </div>
                     )}
                   </div>
+                )}
+                {!chunkAnalysisInfo && (
+                  <p className="text-sm text-gray-500">
+                    분석 정보를 불러오는 중...
+                  </p>
                 )}
               </div>
 
