@@ -497,7 +497,7 @@ ${chunkPdfText}
             // Claude API 호출
             const apiStream = anthropic.messages.stream({
               model: 'claude-sonnet-4-20250514',
-              max_tokens: 32000,
+              max_tokens: 64000,
               system: [
                 {
                   type: 'text',
@@ -720,7 +720,7 @@ ${chunkPdfText}
           // 스트리밍 모드로 Claude API 호출
           const apiStream = anthropic.messages.stream({
             model: 'claude-sonnet-4-20250514',
-            max_tokens: 32000,
+            max_tokens: 64000,
             system: [
               {
                 type: 'text',
