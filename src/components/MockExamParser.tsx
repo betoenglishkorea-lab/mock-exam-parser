@@ -125,6 +125,7 @@ export function MockExamParser() {
     sourceGrade: '',
     sourceYear: '',
     sourceOrg: '',
+    pdfFilename: '',
     searchText: ''
   });
 
@@ -135,8 +136,13 @@ export function MockExamParser() {
     type3List: [] as string[],
     gradeList: [] as string[],
     yearList: [] as string[],
-    orgList: [] as string[]
+    orgList: [] as string[],
+    pdfFilenameList: [] as string[]
   });
+
+  // 문제 수정 모달 상태
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [editingQuestion, setEditingQuestion] = useState<MockExamQuestion | null>(null);
 
   // 통계
   const [stats, setStats] = useState({
@@ -207,6 +213,8 @@ export function MockExamParser() {
       const yearSet = new Set<string>();
       const orgSet = new Set<string>();
 
+      const pdfFilenameSet = new Set<string>();
+
       data.forEach(q => {
         if (q.type1) type1Set.add(q.type1);
         if (q.type2) type2Set.add(q.type2);
@@ -214,6 +222,7 @@ export function MockExamParser() {
         if (q.source_grade) gradeSet.add(q.source_grade);
         if (q.source_year) yearSet.add(String(q.source_year));
         if (q.source_org) orgSet.add(q.source_org);
+        if (q.pdf_filename) pdfFilenameSet.add(q.pdf_filename);
       });
 
       setFilterOptions({
@@ -222,7 +231,8 @@ export function MockExamParser() {
         type3List: Array.from(type3Set).sort(),
         gradeList: Array.from(gradeSet).sort(),
         yearList: Array.from(yearSet).sort((a, b) => Number(b) - Number(a)),
-        orgList: Array.from(orgSet).sort()
+        orgList: Array.from(orgSet).sort(),
+        pdfFilenameList: Array.from(pdfFilenameSet).sort()
       });
     }
   }, []);
@@ -248,6 +258,9 @@ export function MockExamParser() {
     }
     if (filters.sourceOrg) {
       result = result.filter(q => q.source_org === filters.sourceOrg);
+    }
+    if (filters.pdfFilename) {
+      result = result.filter(q => q.pdf_filename === filters.pdfFilename);
     }
     if (filters.searchText) {
       const searchLower = filters.searchText.toLowerCase();
@@ -1050,8 +1063,62 @@ export function MockExamParser() {
       sourceGrade: '',
       sourceYear: '',
       sourceOrg: '',
+      pdfFilename: '',
       searchText: ''
     });
+  };
+
+  // PDF 파일 열기 (Storage에서 signed URL로)
+  const openPdfFile = async (pdfFilename: string) => {
+    // pdf_processing_queue에서 storage_path 조회
+    const { data } = await supabase
+      .from('pdf_processing_queue')
+      .select('storage_path')
+      .eq('filename', pdfFilename)
+      .single();
+
+    if (data?.storage_path) {
+      const { data: urlData, error } = await supabase.storage
+        .from(STORAGE_BUCKET)
+        .createSignedUrl(data.storage_path, 3600);
+
+      if (error) {
+        alert(`PDF 열기 실패: ${error.message}`);
+      } else if (urlData?.signedUrl) {
+        window.open(urlData.signedUrl, '_blank');
+      }
+    } else {
+      alert('PDF 파일을 찾을 수 없습니다.');
+    }
+  };
+
+  // 문제 수정 저장
+  const saveQuestionEdit = async () => {
+    if (!editingQuestion) return;
+
+    const { error } = await supabase
+      .from('mock_exam_questions')
+      .update({
+        question_text: editingQuestion.question_text,
+        passage: editingQuestion.passage,
+        choice_1: editingQuestion.choice_1,
+        choice_2: editingQuestion.choice_2,
+        choice_3: editingQuestion.choice_3,
+        choice_4: editingQuestion.choice_4,
+        choice_5: editingQuestion.choice_5,
+        correct_answer: editingQuestion.correct_answer,
+        model_translation: editingQuestion.model_translation
+      })
+      .eq('id', editingQuestion.id);
+
+    if (error) {
+      alert(`수정 실패: ${error.message}`);
+    } else {
+      alert('수정이 저장되었습니다.');
+      setShowEditModal(false);
+      setEditingQuestion(null);
+      fetchQuestions();
+    }
   };
 
   return (
@@ -1435,6 +1502,19 @@ export function MockExamParser() {
                   ))}
                 </select>
               </div>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">파일명</label>
+                <select
+                  value={filters.pdfFilename}
+                  onChange={e => setFilters(prev => ({ ...prev, pdfFilename: e.target.value }))}
+                  className="px-3 py-2 border border-gray-300 rounded-lg text-sm max-w-[200px]"
+                >
+                  <option value="">전체</option>
+                  {filterOptions.pdfFilenameList.map(f => (
+                    <option key={f} value={f} title={f}>{f.length > 25 ? f.slice(0, 25) + '...' : f}</option>
+                  ))}
+                </select>
+              </div>
               <div className="flex-1">
                 <label className="block text-xs text-gray-500 mb-1">검색</label>
                 <input
@@ -1470,9 +1550,10 @@ export function MockExamParser() {
                 <table className="min-w-full divide-y divide-gray-200">
                   <thead className="bg-gray-50">
                     <tr>
+                      <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase w-40">파일명</th>
                       <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase w-16">문항번호</th>
                       <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase w-24">유형</th>
-                      <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase w-32">출처</th>
+                      <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase w-28">출처</th>
                       <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase">문제</th>
                       <th className="px-3 py-3 text-center text-xs font-medium text-gray-500 uppercase w-16">정답</th>
                       <th className="px-3 py-3 text-center text-xs font-medium text-gray-500 uppercase w-16">도표</th>
@@ -1482,6 +1563,15 @@ export function MockExamParser() {
                   <tbody className="divide-y divide-gray-200">
                     {filteredQuestions.map(q => (
                       <tr key={q.id} className="hover:bg-gray-50">
+                        <td className="px-3 py-2">
+                          <div
+                            className="text-xs text-blue-600 hover:text-blue-800 truncate max-w-[150px] cursor-pointer"
+                            title={`${q.pdf_filename} (클릭하여 PDF 열기)`}
+                            onClick={() => q.pdf_filename && openPdfFile(q.pdf_filename)}
+                          >
+                            {q.pdf_filename?.replace(/\.pdf$/i, '').slice(0, 20)}...
+                          </div>
+                        </td>
                         <td className="px-3 py-2 text-center">
                           <span className="text-sm font-medium text-gray-900">{q.question_number}</span>
                         </td>
@@ -1499,17 +1589,14 @@ export function MockExamParser() {
                         <td className="px-3 py-2 text-xs text-gray-500">
                           <div>{q.source_year}년 {q.source_month}</div>
                           <div>{q.source_grade} {q.source_org}</div>
-                          <div className="text-gray-400 truncate max-w-[150px]" title={q.pdf_filename}>
-                            {q.pdf_filename?.replace(/\.pdf$/i, '').slice(0, 20)}...
-                          </div>
                         </td>
                         <td className="px-3 py-2">
                           <div
                             className="text-sm text-gray-900 truncate max-w-md cursor-pointer hover:text-blue-600"
-                            title={q.question_text}
+                            title="클릭하여 수정"
                             onClick={() => {
-                              setSelectedQuestion(q);
-                              setShowDetailModal(true);
+                              setEditingQuestion({ ...q });
+                              setShowEditModal(true);
                             }}
                           >
                             {q.question_text || '(문제 텍스트 없음)'}
@@ -1708,6 +1795,103 @@ export function MockExamParser() {
               >
                 클릭하여 이미지 선택
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 문제 수정 모달 */}
+      {showEditModal && editingQuestion && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-lg max-w-4xl w-full max-h-[90vh] overflow-y-auto">
+            <div className="p-6">
+              <div className="flex justify-between items-start mb-4">
+                <h3 className="text-lg font-medium text-gray-900">문제 수정</h3>
+                <button
+                  onClick={() => {
+                    setShowEditModal(false);
+                    setEditingQuestion(null);
+                  }}
+                  className="text-gray-400 hover:text-gray-600"
+                >
+                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">문제</label>
+                  <textarea
+                    value={editingQuestion.question_text || ''}
+                    onChange={e => setEditingQuestion({ ...editingQuestion, question_text: e.target.value })}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                    rows={2}
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">지문</label>
+                  <textarea
+                    value={editingQuestion.passage || ''}
+                    onChange={e => setEditingQuestion({ ...editingQuestion, passage: e.target.value })}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm font-mono"
+                    rows={10}
+                  />
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {[1, 2, 3, 4, 5].map(i => (
+                    <div key={i}>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">선지 {i}</label>
+                      <input
+                        type="text"
+                        value={(editingQuestion[`choice_${i}` as keyof MockExamQuestion] as string) || ''}
+                        onChange={e => setEditingQuestion({ ...editingQuestion, [`choice_${i}`]: e.target.value })}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                      />
+                    </div>
+                  ))}
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">정답</label>
+                    <input
+                      type="text"
+                      value={editingQuestion.correct_answer || ''}
+                      onChange={e => setEditingQuestion({ ...editingQuestion, correct_answer: e.target.value })}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">모범해석</label>
+                  <textarea
+                    value={editingQuestion.model_translation || ''}
+                    onChange={e => setEditingQuestion({ ...editingQuestion, model_translation: e.target.value })}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                    rows={4}
+                  />
+                </div>
+
+                <div className="flex justify-end gap-3 pt-4 border-t">
+                  <button
+                    onClick={() => {
+                      setShowEditModal(false);
+                      setEditingQuestion(null);
+                    }}
+                    className="px-4 py-2 text-gray-600 hover:text-gray-800 border border-gray-300 rounded-lg"
+                  >
+                    취소
+                  </button>
+                  <button
+                    onClick={saveQuestionEdit}
+                    className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+                  >
+                    저장
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
         </div>

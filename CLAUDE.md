@@ -92,9 +92,22 @@ mock-exam-parser/
 
 ---
 
-## 4. DB 테이블
+## 4. Supabase 프로젝트 정보
 
-### 4.1 pdf_processing_queue
+| 항목 | 값 |
+|------|------|
+| 프로젝트명 | 초등_베토 성장 레포트 |
+| Project ID | `xhvponkrbihlndqkscwz` |
+| Region | ap-northeast-2 (서울) |
+| Organization | betoenglishkorea-lab's Org |
+
+**MCP 사용 시**: 위 Project ID로 `mcp__supabase__execute_sql` 등 호출
+
+---
+
+## 5. DB 테이블
+
+### 5.1 pdf_processing_queue
 PDF 처리 큐 관리
 
 | 컬럼 | 타입 | 설명 |
@@ -115,7 +128,7 @@ PDF 처리 큐 관리
 | started_at | TIMESTAMP | 처리 시작일 |
 | completed_at | TIMESTAMP | 처리 완료일 |
 
-### 4.2 mock_exam_questions
+### 5.2 mock_exam_questions
 파싱된 문항 데이터
 
 | 컬럼 | 타입 | 설명 |
@@ -141,20 +154,20 @@ PDF 처리 큐 관리
 
 ---
 
-## 5. Storage 버킷
+## 6. Storage 버킷
 
-### 5.1 mock-exam-pdfs
+### 6.1 mock-exam-pdfs
 - 용도: PDF 파일 저장
 - 공개 여부: 비공개
 
-### 5.2 mock-exam-images
+### 6.2 mock-exam-images
 - 용도: 도표/차트 이미지 저장
 - 공개 여부: 공개
 - 제한: 5MB, 이미지 타입만 (png/jpeg/gif/webp)
 
 ---
 
-## 6. API 엔드포인트
+## 7. API 엔드포인트
 
 ### POST /api/parse-mock-exam
 
@@ -181,7 +194,7 @@ PDF 텍스트를 Claude API로 파싱하여 구조화된 문항 데이터로 변
 
 ---
 
-## 7. 환경변수
+## 8. 환경변수
 
 ### 프론트엔드 (.env)
 ```
@@ -198,7 +211,7 @@ ANTHROPIC_API_KEY=your-anthropic-api-key
 
 ---
 
-## 8. 유형 분류표
+## 9. 유형 분류표
 
 | 유형3 (소분류) | 유형1 (대분류) | 유형2 (중분류) |
 |---------------|---------------|---------------|
@@ -222,7 +235,7 @@ ANTHROPIC_API_KEY=your-anthropic-api-key
 
 ---
 
-## 9. 개발 명령어
+## 10. 개발 명령어
 
 ```bash
 # 의존성 설치
@@ -240,7 +253,7 @@ npm run preview
 
 ---
 
-## 10. 배포
+## 11. 배포
 
 ### Vercel 배포
 1. GitHub에 푸시
@@ -250,7 +263,7 @@ npm run preview
 
 ---
 
-## 11. 주의사항
+## 12. 주의사항
 
 1. **로컬 개발 시**: PDF 처리(AI 파싱)는 Vercel 배포 후에만 작동
 2. **프롬프트 캐싱**: Claude API 호출 시 시스템 프롬프트 캐싱 적용 (비용 90% 절감)
@@ -258,7 +271,7 @@ npm run preview
 
 ---
 
-## 12. 향후 계획
+## 13. 향후 계획
 
 - [ ] 도표 이미지 자동 추출 (PDF 페이지 렌더링)
 - [ ] 문항 편집 기능
