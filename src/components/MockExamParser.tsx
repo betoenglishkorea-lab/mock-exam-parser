@@ -730,12 +730,12 @@ export function MockExamParser() {
       if (questions && questions.length > 0) {
         const numbers = questions.map(q => q.question_number).filter(n => n != null);
         const maxNum = Math.max(...numbers);
-        const totalExpected = item.total_questions || maxNum;
 
-        // 빠진 문항 번호 계산 (1부터 totalExpected까지 중 없는 번호)
+        // 빠진 문항 번호 계산: 1부터 maxNum까지 중 없는 번호만 계산
+        // (total_questions가 잘못 저장된 경우가 많으므로 maxNum 기준으로 계산)
         const numberSet = new Set(numbers);
         const missingNumbers: number[] = [];
-        for (let i = 1; i <= totalExpected; i++) {
+        for (let i = 1; i <= maxNum; i++) {
           if (!numberSet.has(i)) {
             missingNumbers.push(i);
           }
@@ -2591,32 +2591,21 @@ export function MockExamParser() {
                 {chunkAnalysisInfo && (
                   <div className="bg-gray-50 rounded-lg p-3 text-sm">
                     <div className="flex justify-between mb-1">
-                      <span className="text-gray-600">총 문항수:</span>
-                      <span className="font-medium">{chunkTargetItem.total_questions || chunkAnalysisInfo.maxNumber || '?'}개</span>
+                      <span className="text-gray-600">최대 문항번호:</span>
+                      <span className="font-medium">{chunkAnalysisInfo.maxNumber || '?'}번</span>
                     </div>
                     <div className="flex justify-between mb-1">
                       <span className="text-gray-600">분석 완료:</span>
-                      <span className="font-medium text-green-600">{chunkAnalysisInfo.analyzedNumbers.length}개 문항</span>
-                    </div>
-                    <div className="flex justify-between mb-1">
-                      <span className="text-gray-600">분석된 범위:</span>
-                      <span className="font-medium">
-                        {chunkAnalysisInfo.analyzedNumbers.length > 0
-                          ? `1 ~ ${chunkAnalysisInfo.maxNumber}번`
-                          : '없음'}
+                      <span className={`font-medium ${chunkAnalysisInfo.analyzedNumbers.length === chunkAnalysisInfo.maxNumber ? 'text-green-600' : 'text-orange-600'}`}>
+                        {chunkAnalysisInfo.analyzedNumbers.length}개 문항
+                        {chunkAnalysisInfo.maxNumber > 0 && ` (${Math.round(chunkAnalysisInfo.analyzedNumbers.length / chunkAnalysisInfo.maxNumber * 100)}%)`}
                       </span>
                     </div>
-                    {chunkTargetItem.total_questions && chunkAnalysisInfo.maxNumber < chunkTargetItem.total_questions && (
-                      <div className="flex justify-between text-orange-600">
-                        <span>미분석 범위:</span>
-                        <span className="font-medium">{chunkAnalysisInfo.maxNumber + 1} ~ {chunkTargetItem.total_questions}번</span>
-                      </div>
-                    )}
                     {/* 빠진 문항 표시 */}
                     {chunkAnalysisInfo.missingNumbers.length > 0 && (
                       <div className="mt-2 pt-2 border-t border-gray-200">
                         <div className="flex justify-between items-center text-red-600 mb-1">
-                          <span>빠진 문항:</span>
+                          <span>빠진 문항 (1~{chunkAnalysisInfo.maxNumber}번 중):</span>
                           <span className="font-medium">{chunkAnalysisInfo.missingNumbers.length}개</span>
                         </div>
                         <div className="text-xs text-red-500 bg-red-50 rounded p-2 max-h-20 overflow-y-auto">
@@ -2632,6 +2621,11 @@ export function MockExamParser() {
                         >
                           빠진 문항만 재분석 ({chunkAnalysisInfo.missingNumbers.length}개)
                         </button>
+                      </div>
+                    )}
+                    {chunkAnalysisInfo.missingNumbers.length === 0 && chunkAnalysisInfo.analyzedNumbers.length > 0 && (
+                      <div className="mt-2 pt-2 border-t border-gray-200 text-green-600 text-center">
+                        모든 문항이 분석되었습니다
                       </div>
                     )}
                   </div>
