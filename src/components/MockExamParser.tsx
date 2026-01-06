@@ -2323,11 +2323,12 @@ export function MockExamParser() {
                   </span>
                 </div>
                 <div className="flex items-center gap-2">
-                  {/* 이전 문항 버튼 */}
+                  {/* 이전 문항 버튼 (저장 후 이동) */}
                   <button
-                    onClick={() => {
+                    onClick={async () => {
                       const currentIndex = filteredQuestions.findIndex(q => q.id === editingQuestion.id);
                       if (currentIndex > 0) {
+                        await saveQuestionEdit();
                         setEditingQuestion({ ...filteredQuestions[currentIndex - 1] });
                       }
                     }}
@@ -2336,11 +2337,12 @@ export function MockExamParser() {
                   >
                     ← 이전
                   </button>
-                  {/* 다음 문항 버튼 */}
+                  {/* 다음 문항 버튼 (저장 후 이동) */}
                   <button
-                    onClick={() => {
+                    onClick={async () => {
                       const currentIndex = filteredQuestions.findIndex(q => q.id === editingQuestion.id);
                       if (currentIndex < filteredQuestions.length - 1) {
+                        await saveQuestionEdit();
                         setEditingQuestion({ ...filteredQuestions[currentIndex + 1] });
                       }
                     }}
@@ -2349,8 +2351,10 @@ export function MockExamParser() {
                   >
                     다음 →
                   </button>
+                  {/* X 버튼 (저장 후 닫기) */}
                   <button
-                    onClick={() => {
+                    onClick={async () => {
+                      await saveQuestionEdit();
                       setShowEditModal(false);
                       setEditingQuestion(null);
                     }}
@@ -2429,19 +2433,25 @@ export function MockExamParser() {
                   <div className="flex gap-3">
                     <button
                       onClick={() => {
+                        // 취소: 저장하지 않고 닫기
                         setShowEditModal(false);
                         setEditingQuestion(null);
                         setSaveMessage(null);
                       }}
-                      className="px-4 py-2 text-gray-600 hover:text-gray-800 border border-gray-300 rounded-lg"
+                      className="px-4 py-2 text-red-600 hover:text-red-800 border border-red-300 rounded-lg"
                     >
-                      닫기
+                      취소
                     </button>
                     <button
-                      onClick={saveQuestionEdit}
+                      onClick={async () => {
+                        // 저장 후 닫기
+                        await saveQuestionEdit();
+                        setShowEditModal(false);
+                        setEditingQuestion(null);
+                      }}
                       className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
                     >
-                      저장
+                      저장 후 닫기
                     </button>
                   </div>
                 </div>
