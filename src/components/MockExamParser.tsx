@@ -727,6 +727,8 @@ export function MockExamParser() {
 
       const pdfText = await extractTextFromArrayBuffer(arrayBuffer);
 
+      console.log('API 호출 시작...');
+
       // API 호출 (청크 범위 지정)
       const response = await fetch('/api/parse-mock-exam', {
         method: 'POST',
@@ -743,37 +745,60 @@ export function MockExamParser() {
         })
       });
 
+      console.log('API 응답:', response.status, response.statusText);
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`API 오류 (${response.status}): ${errorText}`);
+      }
+
       // SSE 스트림 처리
       const reader = response.body?.getReader();
       const decoder = new TextDecoder();
 
-      if (reader) {
-        let buffer = '';
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
+      if (!reader) {
+        throw new Error('응답 스트림을 읽을 수 없습니다.');
+      }
 
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split('\n');
-          buffer = lines.pop() || '';
+      let buffer = '';
+      let completed = false;
 
-          for (const line of lines) {
-            if (line.startsWith('data: ')) {
-              try {
-                const data = JSON.parse(line.slice(6));
-                if (data.type === 'complete') {
-                  await fetchQueue();
-                  await fetchQuestions();
-                  alert(`${chunkRange.start}번 ~ ${chunkRange.end}번 문항 재분석 완료!\n${data.questionsCount}개 문항이 추출되었습니다.`);
-                } else if (data.type === 'error') {
-                  throw new Error(data.message);
-                }
-              } catch (e) {
-                // JSON 파싱 실패 무시
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            try {
+              const data = JSON.parse(line.slice(6));
+              console.log('SSE 데이터:', data);
+
+              if (data.type === 'complete') {
+                completed = true;
+                await fetchQueue();
+                await fetchQuestions();
+                alert(`${chunkRange.start}번 ~ ${chunkRange.end}번 문항 재분석 완료!\n${data.questionsCount}개 문항이 추출되었습니다.`);
+              } else if (data.type === 'error') {
+                throw new Error(data.message);
+              } else if (data.type === 'progress') {
+                console.log(`진행: 청크 ${data.currentChunk}/${data.totalChunks}`);
               }
+            } catch (e) {
+              if (e instanceof Error && e.message.includes('API')) {
+                throw e;
+              }
+              // JSON 파싱 실패는 무시
             }
           }
         }
+      }
+
+      if (!completed) {
+        throw new Error('처리가 완료되지 않았습니다. 스트림이 중단되었을 수 있습니다.');
       }
     } catch (error) {
       console.error('청크 재분석 오류:', error);
