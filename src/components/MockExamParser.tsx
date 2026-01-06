@@ -1397,6 +1397,9 @@ export function MockExamParser() {
     const { error } = await supabase
       .from('mock_exam_questions')
       .update({
+        type1: editingQuestion.type1,
+        type2: editingQuestion.type2,
+        type3: editingQuestion.type3,
         question_text: editingQuestion.question_text,
         passage: editingQuestion.passage,
         choice_1: editingQuestion.choice_1,
@@ -2368,6 +2371,49 @@ export function MockExamParser() {
               </div>
 
               <div className="space-y-4">
+                {/* 유형 선택 */}
+                <div className="grid grid-cols-3 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">유형1 (대분류)</label>
+                    <select
+                      value={editingQuestion.type1 || ''}
+                      onChange={e => setEditingQuestion({ ...editingQuestion, type1: e.target.value })}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                    >
+                      <option value="">선택</option>
+                      {filterOptions.type1List.map(t => (
+                        <option key={t} value={t}>{t}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">유형2 (중분류)</label>
+                    <select
+                      value={editingQuestion.type2 || ''}
+                      onChange={e => setEditingQuestion({ ...editingQuestion, type2: e.target.value })}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                    >
+                      <option value="">선택</option>
+                      {filterOptions.type2List.map(t => (
+                        <option key={t} value={t}>{t}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">유형3 (소분류)</label>
+                    <select
+                      value={editingQuestion.type3 || ''}
+                      onChange={e => setEditingQuestion({ ...editingQuestion, type3: e.target.value })}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                    >
+                      <option value="">선택</option>
+                      {filterOptions.type3List.map(t => (
+                        <option key={t} value={t}>{t}</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">문제</label>
                   <textarea
