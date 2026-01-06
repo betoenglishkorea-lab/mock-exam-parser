@@ -737,7 +737,7 @@ export function MockExamParser() {
     }
   };
 
-  // 청크 재분석 실행
+  // 청크 재분석 실행 (10개 단위로 분할 처리)
   const reanalyzeChunk = async () => {
     console.log('reanalyzeChunk 호출됨', { chunkTargetItem, chunkRange });
 
@@ -756,8 +756,11 @@ export function MockExamParser() {
       return;
     }
 
-    const questionsToDelete = chunkRange.end - chunkRange.start + 1;
-    if (!confirm(`${chunkRange.start}번 ~ ${chunkRange.end}번 문항(${questionsToDelete}개)을 재분석합니다.\n\n해당 범위의 기존 문항이 삭제되고 다시 추출됩니다.\n계속하시겠습니까?`)) {
+    const questionsToProcess = chunkRange.end - chunkRange.start + 1;
+    const CHUNK_SIZE = 10;
+    const totalChunks = Math.ceil(questionsToProcess / CHUNK_SIZE);
+
+    if (!confirm(`${chunkRange.start}번 ~ ${chunkRange.end}번 문항(${questionsToProcess}개)을 재분석합니다.\n\n${totalChunks}개 청크로 나눠서 처리됩니다.\n해당 범위의 기존 문항이 삭제되고 다시 추출됩니다.\n계속하시겠습니까?`)) {
       return;
     }
 
@@ -779,6 +782,7 @@ export function MockExamParser() {
           .from('mock_exam_questions')
           .delete()
           .in('id', idsToDelete);
+        console.log(`기존 문항 ${existingQuestions.length}개 삭제됨`);
       }
 
       // Storage에서 PDF 다운로드
@@ -789,94 +793,109 @@ export function MockExamParser() {
 
       const pdfText = await extractTextFromArrayBuffer(arrayBuffer);
 
-      console.log('API 호출 시작...');
+      // 청크별로 처리
+      let totalExtracted = 0;
 
-      // API 호출 (청크 범위 지정)
-      const response = await fetch('/api/parse-mock-exam', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          queueId: chunkTargetItem.id,
-          pdfText,
-          filename: chunkTargetItem.filename,
-          extractedType3: chunkTargetItem.extracted_type3,
-          expectedQuestions: chunkTargetItem.total_questions || chunkTargetItem.expected_questions,
-          chunkStart: chunkRange.start,
-          chunkEnd: chunkRange.end,
-          isChunkReanalyze: true
-        })
-      });
+      for (let chunkIdx = 0; chunkIdx < totalChunks; chunkIdx++) {
+        const chunkStart = chunkRange.start + (chunkIdx * CHUNK_SIZE);
+        const chunkEnd = Math.min(chunkStart + CHUNK_SIZE - 1, chunkRange.end);
 
-      console.log('API 응답:', response.status, response.statusText);
+        console.log(`청크 ${chunkIdx + 1}/${totalChunks} 처리 시작 (${chunkStart}~${chunkEnd}번)`);
 
-      if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(`API 오류 (${response.status}): ${errorText}`);
-      }
+        // API 호출 (청크 범위 지정)
+        const response = await fetch('/api/parse-mock-exam', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            queueId: chunkTargetItem.id,
+            pdfText,
+            filename: chunkTargetItem.filename,
+            extractedType3: chunkTargetItem.extracted_type3,
+            expectedQuestions: chunkTargetItem.total_questions || chunkTargetItem.expected_questions,
+            chunkStart,
+            chunkEnd,
+            isChunkReanalyze: true
+          })
+        });
 
-      // SSE 스트림 처리
-      const reader = response.body?.getReader();
-      const decoder = new TextDecoder();
+        console.log(`청크 ${chunkIdx + 1} API 응답:`, response.status);
 
-      if (!reader) {
-        throw new Error('응답 스트림을 읽을 수 없습니다.');
-      }
+        if (!response.ok) {
+          const errorText = await response.text();
+          throw new Error(`API 오류 (${response.status}): ${errorText}`);
+        }
 
-      let buffer = '';
-      let completed = false;
+        // SSE 스트림 처리
+        const reader = response.body?.getReader();
+        const decoder = new TextDecoder();
 
-      const processLine = async (line: string) => {
-        if (line.startsWith('data: ')) {
-          try {
-            const data = JSON.parse(line.slice(6));
-            console.log('SSE 데이터:', data);
+        if (!reader) {
+          throw new Error('응답 스트림을 읽을 수 없습니다.');
+        }
 
-            if (data.type === 'complete' || data.success === true) {
-              completed = true;
-              await fetchQueue();
-              await fetchQuestions();
-              alert(`${chunkRange.start}번 ~ ${chunkRange.end}번 문항 재분석 완료!\n${data.questionsCount || 0}개 문항이 추출되었습니다.`);
-            } else if (data.type === 'error' || data.success === false) {
-              throw new Error(data.message || '알 수 없는 오류');
-            } else if (data.type === 'progress' || data.step) {
-              console.log(`진행: ${data.message || `청크 ${data.currentChunk}/${data.totalChunks}`}`);
+        let buffer = '';
+        let chunkCompleted = false;
+        let chunkExtracted = 0;
+
+        const processLine = async (line: string) => {
+          if (line.startsWith('data: ')) {
+            try {
+              const data = JSON.parse(line.slice(6));
+              console.log(`청크 ${chunkIdx + 1} SSE:`, data);
+
+              if (data.type === 'complete' || data.success === true) {
+                chunkCompleted = true;
+                chunkExtracted = data.questionsCount || 0;
+                totalExtracted += chunkExtracted;
+              } else if (data.type === 'error' || data.success === false) {
+                throw new Error(data.message || '알 수 없는 오류');
+              } else if (data.type === 'progress' || data.step) {
+                console.log(`청크 ${chunkIdx + 1}/${totalChunks} 진행: ${data.message}`);
+              }
+            } catch (e) {
+              if (e instanceof Error && (e.message.includes('API') || e.message.includes('오류'))) {
+                throw e;
+              }
             }
-          } catch (e) {
-            if (e instanceof Error && (e.message.includes('API') || e.message.includes('오류'))) {
-              throw e;
-            }
-            // JSON 파싱 실패는 무시
+          }
+        };
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop() || '';
+
+          for (const line of lines) {
+            await processLine(line);
           }
         }
-      };
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
+        if (buffer.trim()) {
+          await processLine(buffer);
+        }
 
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || '';
+        console.log(`청크 ${chunkIdx + 1}/${totalChunks} 완료: ${chunkExtracted}개 추출`);
 
-        for (const line of lines) {
-          await processLine(line);
+        // 청크 사이 딜레이 (마지막 청크 제외)
+        if (chunkIdx < totalChunks - 1) {
+          await new Promise(resolve => setTimeout(resolve, 2000));
         }
       }
 
-      // 스트림 종료 후 남은 버퍼 처리
-      if (buffer.trim()) {
-        await processLine(buffer);
-      }
+      // 모든 청크 완료
+      await fetchQueue();
+      await fetchQuestions();
+      alert(`${chunkRange.start}번 ~ ${chunkRange.end}번 문항 재분석 완료!\n총 ${totalExtracted}개 문항이 추출되었습니다.`);
 
-      if (!completed) {
-        // 실제로 문항이 저장되었는지 확인
-        await fetchQueue();
-        await fetchQuestions();
-        console.warn('스트림 완료 이벤트를 받지 못했지만, 데이터 새로고침 완료');
-      }
     } catch (error) {
       console.error('청크 재분석 오류:', error);
       alert(`재분석 실패: ${error instanceof Error ? error.message : String(error)}`);
+      // 실패해도 데이터 새로고침
+      await fetchQueue();
+      await fetchQuestions();
     } finally {
       setProcessing(false);
       setChunkTargetItem(null);
