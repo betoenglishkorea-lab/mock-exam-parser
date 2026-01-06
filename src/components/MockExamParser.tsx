@@ -1903,7 +1903,7 @@ export function MockExamParser() {
                     value={editingQuestion.passage || ''}
                     onChange={e => setEditingQuestion({ ...editingQuestion, passage: e.target.value })}
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm font-mono"
-                    rows={10}
+                    rows={18}
                   />
                 </div>
 
