@@ -205,48 +205,24 @@ export function MockExamParser() {
     }));
   }, []);
 
-  // 문제 목록 조회 (전체 데이터 페이지네이션)
-  const fetchQuestions = useCallback(async () => {
-    const allData: MockExamQuestion[] = [];
-    const pageSize = 1000;
-    let from = 0;
-    let hasMore = true;
+  // 필터 옵션만 로딩 (드롭다운 목록용)
+  const fetchFilterOptions = useCallback(async () => {
+    const { data, error } = await supabase
+      .from('mock_exam_questions')
+      .select('type1, type2, type3, source_grade, source_year, source_org, pdf_filename');
 
-    while (hasMore) {
-      const { data: pageData, error } = await supabase
-        .from('mock_exam_questions')
-        .select('*')
-        .order('pdf_filename', { ascending: true })
-        .order('question_number', { ascending: true })
-        .range(from, from + pageSize - 1);
-
-      if (error) {
-        console.error('문항 조회 오류:', error);
-        break;
-      }
-
-      if (pageData && pageData.length > 0) {
-        allData.push(...pageData);
-        from += pageSize;
-        hasMore = pageData.length === pageSize;
-      } else {
-        hasMore = false;
-      }
+    if (error) {
+      console.error('필터 옵션 조회 오류:', error);
+      return;
     }
 
-    const data = allData;
-    if (data.length > 0) {
-      setQuestions(data);
-      setFilteredQuestions(data);
-
-      // 필터 옵션 추출
+    if (data && data.length > 0) {
       const type1Set = new Set<string>();
       const type2Set = new Set<string>();
       const type3Set = new Set<string>();
       const gradeSet = new Set<string>();
       const yearSet = new Set<string>();
       const orgSet = new Set<string>();
-
       const pdfFilenameSet = new Set<string>();
 
       data.forEach(q => {
@@ -271,41 +247,52 @@ export function MockExamParser() {
     }
   }, []);
 
-  // 필터 적용
-  useEffect(() => {
-    let result = [...questions];
+  // 필터 조건에 맞는 문제만 로딩
+  const fetchQuestions = useCallback(async () => {
+    // 필터가 하나도 선택되지 않으면 로딩하지 않음
+    const hasFilter = filters.type1 || filters.type2 || filters.type3 ||
+                      filters.sourceGrade || filters.sourceYear || filters.sourceOrg ||
+                      filters.pdfFilename || filters.searchText;
 
-    if (filters.type1) {
-      result = result.filter(q => q.type1 === filters.type1);
+    if (!hasFilter) {
+      setQuestions([]);
+      setFilteredQuestions([]);
+      return;
     }
-    if (filters.type2) {
-      result = result.filter(q => q.type2 === filters.type2);
-    }
-    if (filters.type3) {
-      result = result.filter(q => q.type3 === filters.type3);
-    }
-    if (filters.sourceGrade) {
-      result = result.filter(q => q.source_grade === filters.sourceGrade);
-    }
-    if (filters.sourceYear) {
-      result = result.filter(q => String(q.source_year) === filters.sourceYear);
-    }
-    if (filters.sourceOrg) {
-      result = result.filter(q => q.source_org === filters.sourceOrg);
-    }
-    if (filters.pdfFilename) {
-      result = result.filter(q => q.pdf_filename === filters.pdfFilename);
-    }
+
+    let query = supabase
+      .from('mock_exam_questions')
+      .select('*')
+      .order('pdf_filename', { ascending: true })
+      .order('question_number', { ascending: true });
+
+    // 서버사이드 필터링
+    if (filters.type1) query = query.eq('type1', filters.type1);
+    if (filters.type2) query = query.eq('type2', filters.type2);
+    if (filters.type3) query = query.eq('type3', filters.type3);
+    if (filters.sourceGrade) query = query.eq('source_grade', filters.sourceGrade);
+    if (filters.sourceYear) query = query.eq('source_year', Number(filters.sourceYear));
+    if (filters.sourceOrg) query = query.eq('source_org', filters.sourceOrg);
+    if (filters.pdfFilename) query = query.eq('pdf_filename', filters.pdfFilename);
     if (filters.searchText) {
-      const searchLower = filters.searchText.toLowerCase();
-      result = result.filter(q =>
-        q.question_text?.toLowerCase().includes(searchLower) ||
-        q.passage?.toLowerCase().includes(searchLower)
-      );
+      query = query.or(`question_text.ilike.%${filters.searchText}%,passage.ilike.%${filters.searchText}%`);
     }
 
-    setFilteredQuestions(result);
-  }, [filters, questions]);
+    const { data, error } = await query;
+
+    if (error) {
+      console.error('문항 조회 오류:', error);
+      return;
+    }
+
+    setQuestions(data || []);
+    setFilteredQuestions(data || []);
+  }, [filters]);
+
+  // 필터 변경 시 문항 조회
+  useEffect(() => {
+    fetchQuestions();
+  }, [fetchQuestions]);
 
   useEffect(() => {
     fetchQueue();
@@ -313,11 +300,12 @@ export function MockExamParser() {
     return () => clearInterval(interval);
   }, [fetchQueue]);
 
+  // 문항 관리 탭 진입 시 필터 옵션만 로딩
   useEffect(() => {
     if (mainTab === 'questions') {
-      fetchQuestions();
+      fetchFilterOptions();
     }
-  }, [mainTab, fetchQuestions]);
+  }, [mainTab, fetchFilterOptions]);
 
   // 드래그 앤 드롭 핸들러
   const handleDrag = (e: React.DragEvent) => {
@@ -1929,7 +1917,14 @@ export function MockExamParser() {
             <div className="overflow-x-auto">
               {filteredQuestions.length === 0 ? (
                 <div className="text-center py-12 text-gray-500">
-                  <p>표시할 문항이 없습니다.</p>
+                  {!(filters.type1 || filters.type2 || filters.type3 || filters.sourceGrade || filters.sourceYear || filters.sourceOrg || filters.pdfFilename || filters.searchText) ? (
+                    <>
+                      <p className="text-lg mb-2">필터를 선택하세요</p>
+                      <p className="text-sm">위의 드롭다운에서 조건을 선택하면 해당 문항이 표시됩니다.</p>
+                    </>
+                  ) : (
+                    <p>조건에 맞는 문항이 없습니다.</p>
+                  )}
                 </div>
               ) : (
                 <table className="min-w-full divide-y divide-gray-200">
