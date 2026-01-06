@@ -566,20 +566,34 @@ export function MockExamParser() {
 
   // 전체 문항 CSV 다운로드
   const downloadAllCSV = async () => {
-    // DB에서 모든 문항 조회
-    const { data: allQuestions, error } = await supabase
-      .from('mock_exam_questions')
-      .select('*')
-      .order('pdf_filename', { ascending: true })
-      .order('question_number', { ascending: true });
+    // DB에서 모든 문항 조회 (페이지네이션으로 전체 조회)
+    let allQuestions: Question[] = [];
+    let offset = 0;
+    const pageSize = 1000;
 
-    if (error) {
-      console.error('전체 문항 조회 오류:', error);
-      alert('전체 문항 조회에 실패했습니다.');
-      return;
+    while (true) {
+      const { data, error: fetchError } = await supabase
+        .from('mock_exam_questions')
+        .select('*')
+        .order('pdf_filename', { ascending: true })
+        .order('question_number', { ascending: true })
+        .range(offset, offset + pageSize - 1);
+
+      if (fetchError) {
+        console.error('전체 문항 조회 오류:', fetchError);
+        alert('전체 문항 조회에 실패했습니다.');
+        return;
+      }
+
+      if (!data || data.length === 0) break;
+
+      allQuestions = [...allQuestions, ...data];
+
+      if (data.length < pageSize) break;
+      offset += pageSize;
     }
 
-    if (!allQuestions || allQuestions.length === 0) {
+    if (allQuestions.length === 0) {
       alert('다운로드할 데이터가 없습니다.');
       return;
     }
