@@ -2211,7 +2211,7 @@ export function MockExamParser() {
       {/* 문제 수정 모달 */}
       {showEditModal && editingQuestion && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-lg max-w-4xl w-full max-h-[90vh] overflow-y-auto">
+          <div className="bg-white rounded-lg max-w-6xl w-full max-h-[90vh] overflow-y-auto">
             <div className="p-6">
               <div className="flex justify-between items-start mb-4">
                 <div className="flex items-center gap-4">
@@ -2281,7 +2281,7 @@ export function MockExamParser() {
                     value={editingQuestion.passage || ''}
                     onChange={e => setEditingQuestion({ ...editingQuestion, passage: e.target.value })}
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm font-mono"
-                    rows={18}
+                    rows={25}
                   />
                 </div>
 
