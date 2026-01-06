@@ -1502,16 +1502,16 @@ export function MockExamParser() {
                   ))}
                 </select>
               </div>
-              <div>
+              <div className="flex-1 min-w-[300px]">
                 <label className="block text-xs text-gray-500 mb-1">파일명</label>
                 <select
                   value={filters.pdfFilename}
                   onChange={e => setFilters(prev => ({ ...prev, pdfFilename: e.target.value }))}
-                  className="px-3 py-2 border border-gray-300 rounded-lg text-sm max-w-[200px]"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
                 >
-                  <option value="">전체</option>
+                  <option value="">전체 ({filterOptions.pdfFilenameList.length}개 파일)</option>
                   {filterOptions.pdfFilenameList.map(f => (
-                    <option key={f} value={f} title={f}>{f.length > 25 ? f.slice(0, 25) + '...' : f}</option>
+                    <option key={f} value={f}>{f.replace(/\.pdf$/i, '')}</option>
                   ))}
                 </select>
               </div>
