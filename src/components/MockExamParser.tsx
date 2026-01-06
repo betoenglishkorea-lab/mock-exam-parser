@@ -764,7 +764,14 @@ export function MockExamParser() {
     const CHUNK_SIZE = 10;
     const totalChunks = Math.ceil(questionsToProcess / CHUNK_SIZE);
 
+    console.log(`\n========================================`);
+    console.log(`[${chunkTargetItem.filename}] 부분 재분석 시작`);
+    console.log(`========================================`);
+    console.log(`[${chunkTargetItem.filename}] 재분석 범위: ${chunkRange.start}번 ~ ${chunkRange.end}번`);
+    console.log(`[${chunkTargetItem.filename}] 총 ${questionsToProcess}문항, ${totalChunks}개 청크로 분할 (청크당 ${CHUNK_SIZE}문항)`);
+
     if (!confirm(`${chunkRange.start}번 ~ ${chunkRange.end}번 문항(${questionsToProcess}개)을 재분석합니다.\n\n${totalChunks}개 청크로 나눠서 처리됩니다.\n해당 범위의 기존 문항이 삭제되고 다시 추출됩니다.\n계속하시겠습니까?`)) {
+      console.log(`[${chunkTargetItem.filename}] 사용자가 취소함`);
       return;
     }
 
@@ -786,25 +793,36 @@ export function MockExamParser() {
           .from('mock_exam_questions')
           .delete()
           .in('id', idsToDelete);
-        console.log(`기존 문항 ${existingQuestions.length}개 삭제됨`);
+        console.log(`[${chunkTargetItem.filename}] 기존 문항 ${existingQuestions.length}개 삭제됨 (${chunkRange.start}~${chunkRange.end}번 범위)`);
+      } else {
+        console.log(`[${chunkTargetItem.filename}] 삭제할 기존 문항 없음`);
       }
 
       // Storage에서 PDF 다운로드
+      console.log(`[${chunkTargetItem.filename}] PDF 파일 다운로드 중...`);
       const arrayBuffer = await getPdfFromStorage(chunkTargetItem.storage_path);
       if (!arrayBuffer) {
         throw new Error('Storage에서 파일을 찾을 수 없습니다.');
       }
+      console.log(`[${chunkTargetItem.filename}] PDF 다운로드 완료 (${Math.round(arrayBuffer.byteLength / 1024)}KB)`);
 
+      console.log(`[${chunkTargetItem.filename}] 텍스트 추출 중...`);
       const pdfText = await extractTextFromArrayBuffer(arrayBuffer);
+      console.log(`[${chunkTargetItem.filename}] 텍스트 추출 완료 (${pdfText.length.toLocaleString()}자)`);
 
       // 청크별로 처리
+      console.log(`[${chunkTargetItem.filename}] 청크 처리 시작...`);
       let totalExtracted = 0;
 
       for (let chunkIdx = 0; chunkIdx < totalChunks; chunkIdx++) {
         const chunkStart = chunkRange.start + (chunkIdx * CHUNK_SIZE);
         const chunkEnd = Math.min(chunkStart + CHUNK_SIZE - 1, chunkRange.end);
+        const chunkQuestionsCount = chunkEnd - chunkStart + 1;
 
-        console.log(`청크 ${chunkIdx + 1}/${totalChunks} 처리 시작 (${chunkStart}~${chunkEnd}번)`);
+        console.log(`\n[${chunkTargetItem.filename}] ----------------------------------------`);
+        console.log(`[${chunkTargetItem.filename}] 청크 ${chunkIdx + 1}/${totalChunks} 처리 시작`);
+        console.log(`[${chunkTargetItem.filename}] 범위: ${chunkStart}번 ~ ${chunkEnd}번 (${chunkQuestionsCount}문항)`);
+        console.log(`[${chunkTargetItem.filename}] API 호출 중...`);
 
         // API 호출 (청크 범위 지정)
         const response = await fetch('/api/parse-mock-exam', {
@@ -822,7 +840,7 @@ export function MockExamParser() {
           })
         });
 
-        console.log(`청크 ${chunkIdx + 1} API 응답:`, response.status);
+        console.log(`[${chunkTargetItem.filename}] 청크 ${chunkIdx + 1} API 응답: ${response.status}`);
 
         if (!response.ok) {
           const errorText = await response.text();
@@ -830,6 +848,7 @@ export function MockExamParser() {
         }
 
         // SSE 스트림 처리
+        console.log(`[${chunkTargetItem.filename}] 청크 ${chunkIdx + 1} SSE 스트림 처리 시작...`);
         const reader = response.body?.getReader();
         const decoder = new TextDecoder();
 
@@ -840,21 +859,32 @@ export function MockExamParser() {
         let buffer = '';
         let chunkCompleted = false;
         let chunkExtracted = 0;
+        let lastHeartbeatLog = 0;
 
         const processLine = async (line: string) => {
           if (line.startsWith('data: ')) {
             try {
               const data = JSON.parse(line.slice(6));
-              console.log(`청크 ${chunkIdx + 1} SSE:`, data);
 
-              if (data.type === 'complete' || data.success === true) {
+              // heartbeat은 5초에 한 번만 로깅
+              if (data.type === 'heartbeat') {
+                const now = Date.now();
+                if (now - lastHeartbeatLog > 5000) {
+                  console.log(`[${chunkTargetItem.filename}] 청크 ${chunkIdx + 1}/${totalChunks} heartbeat: AI 응답 수신 중 (${data.chars?.toLocaleString() || 0}자)`);
+                  lastHeartbeatLog = now;
+                }
+              } else if (data.type === 'complete' || data.success === true) {
                 chunkCompleted = true;
                 chunkExtracted = data.questionsCount || 0;
                 totalExtracted += chunkExtracted;
+                console.log(`[${chunkTargetItem.filename}] 청크 ${chunkIdx + 1}/${totalChunks} complete: ${chunkExtracted}개 문항 추출`);
               } else if (data.type === 'error' || data.success === false) {
+                console.error(`[${chunkTargetItem.filename}] 청크 ${chunkIdx + 1}/${totalChunks} error:`, data.message);
                 throw new Error(data.message || '알 수 없는 오류');
               } else if (data.type === 'progress' || data.step) {
-                console.log(`청크 ${chunkIdx + 1}/${totalChunks} 진행: ${data.message}`);
+                console.log(`[${chunkTargetItem.filename}] 청크 ${chunkIdx + 1}/${totalChunks} progress: ${data.message}`);
+              } else {
+                console.log(`[${chunkTargetItem.filename}] 청크 ${chunkIdx + 1}/${totalChunks} ${data.type || 'event'}:`, data);
               }
             } catch (e) {
               if (e instanceof Error && (e.message.includes('API') || e.message.includes('오류'))) {
@@ -881,21 +911,29 @@ export function MockExamParser() {
           await processLine(buffer);
         }
 
-        console.log(`청크 ${chunkIdx + 1}/${totalChunks} 완료: ${chunkExtracted}개 추출`);
+        console.log(`[${chunkTargetItem.filename}] 청크 ${chunkIdx + 1}/${totalChunks} 처리 완료 ✓`);
+        console.log(`[${chunkTargetItem.filename}] 현재까지 총 ${totalExtracted}개 문항 추출됨`);
 
         // 청크 사이 딜레이 (마지막 청크 제외)
         if (chunkIdx < totalChunks - 1) {
+          console.log(`[${chunkTargetItem.filename}] 다음 청크 처리 전 2초 대기...`);
           await new Promise(resolve => setTimeout(resolve, 2000));
         }
       }
 
       // 모든 청크 완료
+      console.log(`\n========================================`);
+      console.log(`[${chunkTargetItem.filename}] 부분 재분석 완료!`);
+      console.log(`[${chunkTargetItem.filename}] 범위: ${chunkRange.start}번 ~ ${chunkRange.end}번`);
+      console.log(`[${chunkTargetItem.filename}] 총 추출 문항: ${totalExtracted}개`);
+      console.log(`========================================\n`);
+
       await fetchQueue();
       await fetchQuestions();
       alert(`${chunkRange.start}번 ~ ${chunkRange.end}번 문항 재분석 완료!\n총 ${totalExtracted}개 문항이 추출되었습니다.`);
 
     } catch (error) {
-      console.error('청크 재분석 오류:', error);
+      console.error(`[${chunkTargetItem.filename}] 부분 재분석 오류:`, error);
       alert(`재분석 실패: ${error instanceof Error ? error.message : String(error)}`);
       // 실패해도 데이터 새로고침
       await fetchQueue();
