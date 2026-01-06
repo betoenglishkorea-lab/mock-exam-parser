@@ -109,6 +109,7 @@ export function MockExamParser() {
   const [dragActive, setDragActive] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [processing, setProcessing] = useState(false);
+  const [selectedQueueItems, setSelectedQueueItems] = useState<Set<string>>(new Set());
 
   // 문항 탭 상태
   const [questions, setQuestions] = useState<MockExamQuestion[]>([]);
@@ -565,6 +566,73 @@ export function MockExamParser() {
     setTimeout(() => {
       startProcessing();
     }, 100);
+  };
+
+  // 선택된 파일들 일괄 재분석
+  const reanalyzeSelectedItems = async () => {
+    const selectedItems = queue.filter(item => selectedQueueItems.has(item.id));
+    if (selectedItems.length === 0) {
+      alert('재분석할 파일을 선택해주세요.');
+      return;
+    }
+
+    const totalQuestions = selectedItems.reduce((sum, item) => sum + (item.total_questions || 0), 0);
+    if (!confirm(`선택된 ${selectedItems.length}개 파일을 재분석하시겠습니까?\n\n기존에 추출된 총 ${totalQuestions}개 문항이 삭제됩니다.`)) {
+      return;
+    }
+
+    // 각 파일의 기존 문항 삭제 및 상태 초기화
+    for (const item of selectedItems) {
+      await supabase
+        .from('mock_exam_questions')
+        .delete()
+        .eq('pdf_filename', item.filename);
+
+      await supabase
+        .from('pdf_processing_queue')
+        .update({
+          status: 'pending',
+          error_message: null,
+          progress: 0,
+          total_questions: null,
+          processed_questions: null,
+          expected_questions: null,
+          extraction_ratio: null,
+          started_at: null,
+          completed_at: null
+        })
+        .eq('id', item.id);
+    }
+
+    setSelectedQueueItems(new Set());
+    await fetchQueue();
+
+    // 처리 시작
+    setTimeout(() => {
+      startProcessing();
+    }, 100);
+  };
+
+  // 체크박스 토글
+  const toggleQueueItemSelection = (id: string) => {
+    setSelectedQueueItems(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(id)) {
+        newSet.delete(id);
+      } else {
+        newSet.add(id);
+      }
+      return newSet;
+    });
+  };
+
+  // 전체 선택/해제
+  const toggleAllQueueItems = () => {
+    if (selectedQueueItems.size === queue.length) {
+      setSelectedQueueItems(new Set());
+    } else {
+      setSelectedQueueItems(new Set(queue.map(item => item.id)));
+    }
   };
 
   // 이어서 처리 (처리중 상태에서 중단된 경우)
@@ -1341,8 +1409,17 @@ export function MockExamParser() {
 
           {/* 처리 큐 */}
           <div className="bg-white rounded-lg shadow">
-            <div className="p-4 border-b">
+            <div className="p-4 border-b flex items-center justify-between">
               <h3 className="text-lg font-medium text-gray-900">처리 큐</h3>
+              {selectedQueueItems.size > 0 && (
+                <button
+                  onClick={reanalyzeSelectedItems}
+                  disabled={processing}
+                  className="px-3 py-1.5 bg-indigo-600 text-white text-sm rounded-lg hover:bg-indigo-700 disabled:opacity-50"
+                >
+                  선택 재분석 ({selectedQueueItems.size}개)
+                </button>
+              )}
             </div>
             <div className="overflow-x-auto">
               {queue.length === 0 ? (
@@ -1354,6 +1431,14 @@ export function MockExamParser() {
                 <table className="min-w-full divide-y divide-gray-200">
                   <thead className="bg-gray-50">
                     <tr>
+                      <th className="px-4 py-3 text-center w-10">
+                        <input
+                          type="checkbox"
+                          checked={selectedQueueItems.size === queue.length && queue.length > 0}
+                          onChange={toggleAllQueueItems}
+                          className="w-4 h-4 text-indigo-600 rounded border-gray-300 focus:ring-indigo-500"
+                        />
+                      </th>
                       <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">파일명</th>
                       <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">유형</th>
                       <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">학년</th>
@@ -1366,7 +1451,15 @@ export function MockExamParser() {
                   </thead>
                   <tbody className="divide-y divide-gray-200">
                     {queue.map(item => (
-                      <tr key={item.id} className="hover:bg-gray-50">
+                      <tr key={item.id} className={`hover:bg-gray-50 ${selectedQueueItems.has(item.id) ? 'bg-indigo-50' : ''}`}>
+                        <td className="px-4 py-3 text-center">
+                          <input
+                            type="checkbox"
+                            checked={selectedQueueItems.has(item.id)}
+                            onChange={() => toggleQueueItemSelection(item.id)}
+                            className="w-4 h-4 text-indigo-600 rounded border-gray-300 focus:ring-indigo-500"
+                          />
+                        </td>
                         <td className="px-4 py-3 min-w-[400px]">
                           <div
                             className="text-sm font-medium text-blue-600 hover:text-blue-800 cursor-pointer hover:underline whitespace-normal break-words"
@@ -1478,13 +1571,24 @@ export function MockExamParser() {
                               </button>
                             )}
                             {item.status === 'completed' && (
-                              <button
-                                onClick={() => reanalyzeQueueItem(item)}
-                                className="text-indigo-600 hover:text-indigo-800 text-sm"
-                                disabled={processing}
-                              >
-                                재분석
-                              </button>
+                              <>
+                                <button
+                                  onClick={() => {
+                                    setFilters(prev => ({ ...prev, pdf_filename: item.filename }));
+                                    setMainTab('questions');
+                                  }}
+                                  className="text-blue-600 hover:text-blue-800 text-sm font-medium"
+                                >
+                                  문항보기
+                                </button>
+                                <button
+                                  onClick={() => reanalyzeQueueItem(item)}
+                                  className="text-indigo-600 hover:text-indigo-800 text-sm"
+                                  disabled={processing}
+                                >
+                                  재분석
+                                </button>
+                              </>
                             )}
                             <button
                               onClick={() => deleteQueueItem(item.id, item.storage_path)}
