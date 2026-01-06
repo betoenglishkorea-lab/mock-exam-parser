@@ -145,6 +145,11 @@ export function MockExamParser() {
   const [showEditModal, setShowEditModal] = useState(false);
   const [editingQuestion, setEditingQuestion] = useState<MockExamQuestion | null>(null);
 
+  // 청크 재분석 모달 상태
+  const [showChunkModal, setShowChunkModal] = useState(false);
+  const [chunkTargetItem, setChunkTargetItem] = useState<PdfQueueItem | null>(null);
+  const [chunkRange, setChunkRange] = useState({ start: 1, end: 10 });
+
   // 통계
   const [stats, setStats] = useState({
     totalPdfs: 0,
@@ -632,6 +637,115 @@ export function MockExamParser() {
       setSelectedQueueItems(new Set());
     } else {
       setSelectedQueueItems(new Set(queue.map(item => item.id)));
+    }
+  };
+
+  // 청크 재분석 모달 열기
+  const openChunkReanalyzeModal = (item: PdfQueueItem) => {
+    setChunkTargetItem(item);
+    setChunkRange({ start: 1, end: Math.min(10, item.total_questions || 10) });
+    setShowChunkModal(true);
+  };
+
+  // 청크 재분석 실행
+  const reanalyzeChunk = async () => {
+    if (!chunkTargetItem || !chunkTargetItem.storage_path) {
+      alert('파일 정보가 없습니다.');
+      return;
+    }
+
+    if (chunkRange.start > chunkRange.end) {
+      alert('시작 번호가 끝 번호보다 클 수 없습니다.');
+      return;
+    }
+
+    const questionsToDelete = chunkRange.end - chunkRange.start + 1;
+    if (!confirm(`${chunkRange.start}번 ~ ${chunkRange.end}번 문항(${questionsToDelete}개)을 재분석합니다.\n\n해당 범위의 기존 문항이 삭제되고 다시 추출됩니다.\n계속하시겠습니까?`)) {
+      return;
+    }
+
+    setShowChunkModal(false);
+    setProcessing(true);
+
+    try {
+      // 해당 범위의 기존 문항 삭제
+      const { data: existingQuestions } = await supabase
+        .from('mock_exam_questions')
+        .select('id, question_number')
+        .eq('pdf_filename', chunkTargetItem.filename)
+        .gte('question_number', chunkRange.start)
+        .lte('question_number', chunkRange.end);
+
+      if (existingQuestions && existingQuestions.length > 0) {
+        const idsToDelete = existingQuestions.map(q => q.id);
+        await supabase
+          .from('mock_exam_questions')
+          .delete()
+          .in('id', idsToDelete);
+      }
+
+      // Storage에서 PDF 다운로드
+      const arrayBuffer = await getPdfFromStorage(chunkTargetItem.storage_path);
+      if (!arrayBuffer) {
+        throw new Error('Storage에서 파일을 찾을 수 없습니다.');
+      }
+
+      const pdfText = await extractTextFromArrayBuffer(arrayBuffer);
+
+      // API 호출 (청크 범위 지정)
+      const response = await fetch('/api/parse-mock-exam', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          queueId: chunkTargetItem.id,
+          pdfText,
+          filename: chunkTargetItem.filename,
+          extractedType3: chunkTargetItem.extracted_type3,
+          expectedQuestions: chunkTargetItem.total_questions || chunkTargetItem.expected_questions,
+          chunkStart: chunkRange.start,
+          chunkEnd: chunkRange.end,
+          isChunkReanalyze: true
+        })
+      });
+
+      // SSE 스트림 처리
+      const reader = response.body?.getReader();
+      const decoder = new TextDecoder();
+
+      if (reader) {
+        let buffer = '';
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop() || '';
+
+          for (const line of lines) {
+            if (line.startsWith('data: ')) {
+              try {
+                const data = JSON.parse(line.slice(6));
+                if (data.type === 'complete') {
+                  await fetchQueue();
+                  await fetchQuestions();
+                  alert(`${chunkRange.start}번 ~ ${chunkRange.end}번 문항 재분석 완료!\n${data.questionsCount}개 문항이 추출되었습니다.`);
+                } else if (data.type === 'error') {
+                  throw new Error(data.message);
+                }
+              } catch (e) {
+                // JSON 파싱 실패 무시
+              }
+            }
+          }
+        }
+      }
+    } catch (error) {
+      console.error('청크 재분석 오류:', error);
+      alert(`재분석 실패: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setProcessing(false);
+      setChunkTargetItem(null);
     }
   };
 
@@ -1582,11 +1696,18 @@ export function MockExamParser() {
                                   문항보기
                                 </button>
                                 <button
+                                  onClick={() => openChunkReanalyzeModal(item)}
+                                  className="text-teal-600 hover:text-teal-800 text-sm"
+                                  disabled={processing}
+                                >
+                                  부분재분석
+                                </button>
+                                <button
                                   onClick={() => reanalyzeQueueItem(item)}
                                   className="text-indigo-600 hover:text-indigo-800 text-sm"
                                   disabled={processing}
                                 >
-                                  재분석
+                                  전체재분석
                                 </button>
                               </>
                             )}
@@ -1985,6 +2106,103 @@ export function MockExamParser() {
               >
                 클릭하여 이미지 선택
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 청크 재분석 모달 */}
+      {showChunkModal && chunkTargetItem && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-lg max-w-md w-full">
+            <div className="p-6">
+              <div className="flex justify-between items-start mb-4">
+                <h3 className="text-lg font-medium text-gray-900">부분 재분석</h3>
+                <button
+                  onClick={() => setShowChunkModal(false)}
+                  className="text-gray-400 hover:text-gray-600"
+                >
+                  ✕
+                </button>
+              </div>
+
+              <div className="mb-4">
+                <p className="text-sm text-gray-600 mb-2">
+                  <span className="font-medium">{chunkTargetItem.filename}</span>
+                </p>
+                <p className="text-sm text-gray-500">
+                  총 {chunkTargetItem.total_questions || '?'}개 문항 중 특정 범위만 재분석합니다.
+                </p>
+              </div>
+
+              <div className="flex items-center gap-3 mb-6">
+                <div className="flex-1">
+                  <label className="block text-xs text-gray-500 mb-1">시작 번호</label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={chunkTargetItem.total_questions || 100}
+                    value={chunkRange.start}
+                    onChange={e => setChunkRange(prev => ({ ...prev, start: parseInt(e.target.value) || 1 }))}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-center"
+                  />
+                </div>
+                <span className="text-gray-400 pt-5">~</span>
+                <div className="flex-1">
+                  <label className="block text-xs text-gray-500 mb-1">끝 번호</label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={chunkTargetItem.total_questions || 100}
+                    value={chunkRange.end}
+                    onChange={e => setChunkRange(prev => ({ ...prev, end: parseInt(e.target.value) || 10 }))}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-center"
+                  />
+                </div>
+              </div>
+
+              <div className="flex gap-2 mb-4">
+                <button
+                  onClick={() => setChunkRange({ start: 1, end: 10 })}
+                  className="px-3 py-1 text-xs bg-gray-100 hover:bg-gray-200 rounded"
+                >
+                  1~10
+                </button>
+                <button
+                  onClick={() => setChunkRange({ start: 11, end: 20 })}
+                  className="px-3 py-1 text-xs bg-gray-100 hover:bg-gray-200 rounded"
+                >
+                  11~20
+                </button>
+                <button
+                  onClick={() => setChunkRange({ start: 21, end: 30 })}
+                  className="px-3 py-1 text-xs bg-gray-100 hover:bg-gray-200 rounded"
+                >
+                  21~30
+                </button>
+                <button
+                  onClick={() => setChunkRange({ start: 31, end: Math.min(40, chunkTargetItem.total_questions || 40) })}
+                  className="px-3 py-1 text-xs bg-gray-100 hover:bg-gray-200 rounded"
+                >
+                  31~40
+                </button>
+              </div>
+
+              <div className="flex justify-end gap-2">
+                <button
+                  onClick={() => setShowChunkModal(false)}
+                  className="px-4 py-2 text-gray-600 hover:text-gray-800"
+                >
+                  취소
+                </button>
+                <button
+                  onClick={reanalyzeChunk}
+                  disabled={processing}
+                  className="px-4 py-2 bg-teal-600 text-white rounded-lg hover:bg-teal-700 disabled:opacity-50"
+                >
+                  재분석 시작
+                </button>
+              </div>
             </div>
           </div>
         </div>

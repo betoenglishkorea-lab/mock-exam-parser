@@ -362,6 +362,10 @@ export default async function handler(req: Request) {
       expectedQuestions, // 예상 총 문항 수
       startNum,        // 시작 문항 번호
       endNum,          // 끝 문항 번호
+      // 청크 재분석 파라미터
+      chunkStart,      // 재분석 시작 문항 번호
+      chunkEnd,        // 재분석 끝 문항 번호
+      isChunkReanalyze, // 청크 재분석 모드 여부
     } = body;
 
     if (!queueId || !pdfText) {
@@ -372,6 +376,7 @@ export default async function handler(req: Request) {
     }
 
     const isChunkMode = chunkIndex !== undefined && totalChunks !== undefined;
+    const isReanalyzeMode = isChunkReanalyze === true && chunkStart !== undefined && chunkEnd !== undefined;
 
     // SSE 스트리밍 응답 설정
     const encoder = new TextEncoder();
@@ -383,6 +388,118 @@ export default async function handler(req: Request) {
         };
 
         try {
+          // 청크 재분석 모드 - 특정 범위만 재파싱
+          if (isReanalyzeMode) {
+            sendEvent('progress', { step: 1, message: `${chunkStart}번~${chunkEnd}번 문항 재분석 시작...` });
+
+            // PDF 텍스트를 청크 범위에 맞게 분할
+            let chunkPdfText = pdfText;
+
+            // 전체 텍스트가 너무 크면 분할 시도
+            if (pdfText.length > 300000) {
+              const startPattern = new RegExp(`(?:^|\\n)\\s*${chunkStart}\\s*[.)]`, 'm');
+              const endPattern = new RegExp(`(?:^|\\n)\\s*${Math.min(chunkEnd + 5, expectedQuestions || chunkEnd + 5)}\\s*[.)]`, 'm');
+
+              const startMatch = pdfText.match(startPattern);
+              const endMatch = pdfText.match(endPattern);
+
+              if (startMatch && startMatch.index !== undefined) {
+                const startIdx = Math.max(0, startMatch.index - 500);
+                const endIdx = endMatch && endMatch.index !== undefined
+                  ? Math.min(pdfText.length, endMatch.index + 5000)
+                  : Math.min(pdfText.length, startMatch.index + 50000);
+
+                chunkPdfText = pdfText.substring(startIdx, endIdx);
+              }
+            }
+
+            // 파일명에서 유형 힌트 생성
+            const userContent = `## 파일명 (유형 힌트)
+${filename}
+
+## PDF 텍스트
+${chunkPdfText}
+
+## 중요: 부분 추출 모드
+지금은 문항 번호 ${chunkStart}번부터 ${chunkEnd}번까지만 추출하세요.
+다른 문항은 무시하고, 해당 범위의 문항만 정확하게 추출해주세요.`;
+
+            sendEvent('progress', { step: 2, message: `${chunkStart}번~${chunkEnd}번 AI 파싱 중...` });
+
+            // Claude API 호출
+            const apiStream = anthropic.messages.stream({
+              model: 'claude-sonnet-4-20250514',
+              max_tokens: 16000,
+              system: [
+                {
+                  type: 'text',
+                  text: PARSE_PROMPT,
+                  cache_control: { type: 'ephemeral' }
+                }
+              ],
+              messages: [{ role: 'user', content: userContent }],
+            });
+
+            let fullResponse = '';
+            for await (const event of apiStream) {
+              if (event.type === 'content_block_delta') {
+                const delta = event.delta as { type: string; text?: string };
+                if (delta.type === 'text_delta' && delta.text) {
+                  fullResponse += delta.text;
+                }
+              }
+            }
+
+            // JSON 추출 및 파싱
+            const jsonMatch = fullResponse.match(/\[[\s\S]*\]/);
+            if (!jsonMatch) {
+              sendEvent('error', { message: 'JSON 형식 응답을 찾을 수 없습니다' });
+              controller.close();
+              return;
+            }
+
+            const questions = JSON.parse(jsonMatch[0]);
+
+            // 문항 저장
+            for (let i = 0; i < questions.length; i++) {
+              const q = questions[i];
+              const typeInfo = findTypeMapping(q.type3 || extractedType3 || '');
+
+              const questionData = {
+                type1: typeInfo.type1 || q.type1 || '',
+                type2: typeInfo.type2 || q.type2 || '',
+                type3: q.type3 || extractedType3 || '',
+                source_year: q.source_year || null,
+                source_month: q.source_month || '',
+                source_grade: q.source_grade || '',
+                source_org: q.source_org || '',
+                source_number: q.source_number || null,
+                question_number: q.source_number || (chunkStart + i),
+                question_text: q.question_text || '',
+                passage: q.passage || '',
+                choice_1: q.choice_1 || '',
+                choice_2: q.choice_2 || '',
+                choice_3: q.choice_3 || '',
+                choice_4: q.choice_4 || '',
+                choice_5: q.choice_5 || '',
+                correct_answer: q.correct_answer || '',
+                model_translation: q.model_translation || '',
+                pdf_filename: filename,
+              };
+
+              await supabase.from('mock_exam_questions').insert(questionData);
+            }
+
+            sendEvent('complete', {
+              success: true,
+              questionsCount: questions.length,
+              message: `${chunkStart}번~${chunkEnd}번 재분석 완료 (${questions.length}개 문항)`,
+            });
+
+            controller.close();
+            return;
+          }
+
           // 청크 모드가 아닌 경우 (첫 호출) - 문항수 계산 후 청크 정보 반환
           if (!isChunkMode) {
             // 먼저 현재 상태 확인 (동시 처리 방지)
