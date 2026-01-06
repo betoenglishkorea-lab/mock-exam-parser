@@ -768,7 +768,8 @@ export function MockExamParser() {
               console.log('SSE Data:', data);
 
               if (data.success === false || data.error) {
-                throw new Error(data.message || data.error || 'API 처리 실패');
+                const errorMsg = data.details ? `${data.message || data.error}: ${data.details}` : (data.message || data.error || 'API 처리 실패');
+                throw new Error(errorMsg);
               }
             } catch (parseErr) {
               if (!(parseErr instanceof SyntaxError)) {
@@ -853,7 +854,8 @@ export function MockExamParser() {
               result = { ...result, ...data };
             }
             if (currentEventType === 'error') {
-              throw new Error(data.message || data.details || 'API 오류');
+              const errorMsg = data.details ? `${data.message}: ${data.details}` : (data.message || 'API 오류');
+              throw new Error(errorMsg);
             }
           } catch (parseErr) {
             if (!(parseErr instanceof SyntaxError)) throw parseErr;
