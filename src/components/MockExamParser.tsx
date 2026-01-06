@@ -1300,9 +1300,9 @@ export function MockExamParser() {
                   <tbody className="divide-y divide-gray-200">
                     {queue.map(item => (
                       <tr key={item.id} className="hover:bg-gray-50">
-                        <td className="px-4 py-3">
+                        <td className="px-4 py-3 min-w-[400px]">
                           <div
-                            className="text-sm font-medium text-blue-600 hover:text-blue-800 truncate max-w-xs cursor-pointer hover:underline"
+                            className="text-sm font-medium text-blue-600 hover:text-blue-800 cursor-pointer hover:underline whitespace-normal break-words"
                             title={`${item.filename} (클릭하여 PDF 보기)`}
                             onClick={async () => {
                               if (item.storage_path) {
