@@ -531,6 +531,42 @@ export function MockExamParser() {
     }, 100);
   };
 
+  // 완료된 파일 재분석 (기존 문항 삭제 후 재시도)
+  const reanalyzeQueueItem = async (item: PdfQueueItem) => {
+    if (!confirm(`"${item.filename}" 파일을 재분석하시겠습니까?\n\n기존에 추출된 ${item.total_questions || 0}개 문항이 삭제됩니다.`)) {
+      return;
+    }
+
+    // 기존 문항 삭제
+    await supabase
+      .from('mock_exam_questions')
+      .delete()
+      .eq('pdf_filename', item.filename);
+
+    // 상태 초기화 후 재시도
+    await supabase
+      .from('pdf_processing_queue')
+      .update({
+        status: 'pending',
+        error_message: null,
+        progress: 0,
+        total_questions: null,
+        processed_questions: null,
+        expected_questions: null,
+        extraction_ratio: null,
+        started_at: null,
+        completed_at: null
+      })
+      .eq('id', item.id);
+
+    await fetchQueue();
+
+    // 재시도 후 자동으로 처리 시작
+    setTimeout(() => {
+      startProcessing();
+    }, 100);
+  };
+
   // 이어서 처리 (처리중 상태에서 중단된 경우)
   const resumeProcessing = async (item: PdfQueueItem) => {
     if (processing) {
@@ -1324,6 +1360,7 @@ export function MockExamParser() {
                       <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">출처</th>
                       <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">상태</th>
                       <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">문제수</th>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">완료시간</th>
                       <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">액션</th>
                     </tr>
                   </thead>
@@ -1401,6 +1438,16 @@ export function MockExamParser() {
                             </div>
                           )}
                         </td>
+                        <td className="px-4 py-3 text-sm text-gray-500">
+                          {item.completed_at ? (
+                            new Date(item.completed_at).toLocaleString('ko-KR', {
+                              month: 'numeric',
+                              day: 'numeric',
+                              hour: '2-digit',
+                              minute: '2-digit'
+                            })
+                          ) : '-'}
+                        </td>
                         <td className="px-4 py-3">
                           <div className="flex gap-2 flex-wrap">
                             {(item.status === 'failed' || item.status === 'warning') && (
@@ -1428,6 +1475,15 @@ export function MockExamParser() {
                                 disabled={processing}
                               >
                                 이어서처리
+                              </button>
+                            )}
+                            {item.status === 'completed' && (
+                              <button
+                                onClick={() => reanalyzeQueueItem(item)}
+                                className="text-indigo-600 hover:text-indigo-800 text-sm"
+                                disabled={processing}
+                              >
+                                재분석
                               </button>
                             )}
                             <button
