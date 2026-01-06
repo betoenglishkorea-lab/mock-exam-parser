@@ -171,16 +171,20 @@ const PARSE_PROMPT = `당신은 교육청 모의고사 PDF 텍스트를 구조�
 - 어휘
 - 어휘 영영풀이
 
-### 빈칸 유형 구분 기준
+### 빈칸 유형 구분 기준 (선지 형태로 판단)
+
+⚠️ 빈칸의 언더스코어 길이가 아닌, **선지 형태**로 유형을 구분
 
 1. **짧은 빈칸추론**
-   - 빈칸에 들어갈 내용: 단어, 구, 짧은 절
-   - 선지 형태: 단어나 짧은 구 (예: ① their coloration ② their violence)
+   - 선지 형태: 단어 1~2개, 짧은 구
+   - 예: ① outdated ② factual ③ incomplete
+   - 예: ① their coloration ② their violence
    - 빈칸 1개
 
 2. **긴 빈칸추론**
-   - 빈칸에 들어갈 내용: 긴 절, 문장
-   - 선지 형태: to부정사구, 긴 구/절 (예: ① to move place to place ② to control the temperature)
+   - 선지 형태: 3단어 이상의 구/절, to부정사구, 문장
+   - 예: ① to move place to place ② to control the temperature
+   - 예: ① both sides when reporting an issue
    - 빈칸 1개
 
 3. **접속사/연결사**
