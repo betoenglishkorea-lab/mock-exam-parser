@@ -223,25 +223,27 @@ export function MockExamParser() {
       .limit(100);
 
     if (queueData) {
-      // 각 파일별 실제 DB 문항 수 조회
-      const filenames = queueData.map(q => q.filename);
-      const { data: questionCounts } = await supabase
-        .from('mock_exam_questions')
-        .select('pdf_filename')
-        .in('pdf_filename', filenames);
-
-      // 파일별 문항 수 집계
+      // 각 파일별 실제 DB 문항 수 조회 (RPC 또는 개별 count 쿼리)
       const countMap: Record<string, number> = {};
-      if (questionCounts) {
-        questionCounts.forEach(q => {
-          countMap[q.pdf_filename] = (countMap[q.pdf_filename] || 0) + 1;
-        });
-      }
+
+      // 완료/경고/실패 상태인 파일들만 카운트 조회 (성능 최적화)
+      const filesToCount = queueData.filter(q =>
+        q.status === 'completed' || q.status === 'warning' || q.status === 'failed' || q.status === 'processing'
+      );
+
+      // 병렬로 각 파일의 문항 수 조회
+      await Promise.all(filesToCount.map(async (q) => {
+        const { count } = await supabase
+          .from('mock_exam_questions')
+          .select('*', { count: 'exact', head: true })
+          .eq('pdf_filename', q.filename);
+        countMap[q.filename] = count || 0;
+      }));
 
       // 큐 데이터에 실제 문항 수 추가
       const queueWithActualCounts = queueData.map(q => ({
         ...q,
-        actual_questions: countMap[q.filename] || 0
+        actual_questions: countMap[q.filename] ?? 0
       }));
 
       setQueue(queueWithActualCounts);
