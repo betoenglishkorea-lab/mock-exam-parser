@@ -731,17 +731,27 @@ export function MockExamParser() {
         const numbers = questions.map(q => q.question_number).filter(n => n != null);
         const maxNum = Math.max(...numbers);
 
-        // 빠진 문항 번호 계산: 1부터 maxNum까지 중 없는 번호만 계산
-        // (total_questions가 잘못 저장된 경우가 많으므로 maxNum 기준으로 계산)
+        // 예상 총 문항수 결정:
+        // - total_questions가 maxNum 이상이면 total_questions 사용 (마지막 번호가 누락된 경우 대비)
+        // - total_questions가 maxNum보다 작으면 maxNum 사용 (total_questions가 잘못된 경우)
+        // - total_questions가 maxNum보다 너무 크면 (2배 이상) maxNum 사용 (total_questions가 잘못된 경우)
+        let expectedTotal = maxNum;
+        if (item.total_questions) {
+          if (item.total_questions >= maxNum && item.total_questions < maxNum * 2) {
+            expectedTotal = item.total_questions;
+          }
+        }
+
+        // 빠진 문항 번호 계산: 1부터 expectedTotal까지 중 없는 번호
         const numberSet = new Set(numbers);
         const missingNumbers: number[] = [];
-        for (let i = 1; i <= maxNum; i++) {
+        for (let i = 1; i <= expectedTotal; i++) {
           if (!numberSet.has(i)) {
             missingNumbers.push(i);
           }
         }
 
-        setChunkAnalysisInfo({ analyzedNumbers: numbers, maxNumber: maxNum, missingNumbers });
+        setChunkAnalysisInfo({ analyzedNumbers: numbers, maxNumber: expectedTotal, missingNumbers });
 
         // 빠진 문항이 있으면 첫 번째 빠진 문항부터 시작하도록 설정
         if (missingNumbers.length > 0) {
