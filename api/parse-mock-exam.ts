@@ -480,7 +480,12 @@ ${chunkPdfText}
 
 ## 중요: 부분 추출 모드
 지금은 문항 번호 ${chunkStart}번부터 ${chunkEnd}번까지만 추출하세요.
-다른 문항은 무시하고, 해당 범위의 문항만 정확하게 추출해주세요.`;
+다른 문항은 무시하고, 해당 범위의 문항만 정확하게 추출해주세요.
+
+**question_number 필수**: 반드시 PDF 내 순번(${chunkStart}~${chunkEnd})을 question_number로 반환하세요.
+- 첫 번째 문항: question_number = ${chunkStart}
+- 두 번째 문항: question_number = ${chunkStart + 1}
+- (source_number는 원 시험지 번호로 별도 저장)`;
 
             sendEvent('progress', { step: 2, message: `${chunkStart}번~${chunkEnd}번 AI 파싱 중...` });
 
