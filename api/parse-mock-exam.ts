@@ -453,22 +453,27 @@ export default async function handler(req: Request) {
             // PDF 텍스트를 청크 범위에 맞게 분할
             let chunkPdfText = pdfText;
 
-            // 전체 텍스트가 너무 크면 분할 시도
-            if (pdfText.length > 300000) {
-              const startPattern = new RegExp(`(?:^|\\n)\\s*${chunkStart}\\s*[.)]`, 'm');
-              const endPattern = new RegExp(`(?:^|\\n)\\s*${Math.min(chunkEnd + 5, expectedQuestions || chunkEnd + 5)}\\s*[.)]`, 'm');
+            // 부분재분석에서는 항상 필요한 범위만 추출 시도 (토큰 절약)
+            // 문항 번호 패턴으로 시작/끝 위치 찾기
+            const startPattern = new RegExp(`(?:^|\\n)\\s*${chunkStart}\\s*[.)]`, 'm');
+            const endPattern = new RegExp(`(?:^|\\n)\\s*${Math.min(chunkEnd + 3, expectedQuestions || chunkEnd + 3)}\\s*[.)]`, 'm');
 
-              const startMatch = pdfText.match(startPattern);
-              const endMatch = pdfText.match(endPattern);
+            const startMatch = pdfText.match(startPattern);
+            const endMatch = pdfText.match(endPattern);
 
-              if (startMatch && startMatch.index !== undefined) {
-                const startIdx = Math.max(0, startMatch.index - 500);
-                const endIdx = endMatch && endMatch.index !== undefined
-                  ? Math.min(pdfText.length, endMatch.index + 5000)
-                  : Math.min(pdfText.length, startMatch.index + 50000);
+            if (startMatch && startMatch.index !== undefined) {
+              // 시작점 앞에 약간의 컨텍스트 포함
+              const startIdx = Math.max(0, startMatch.index - 300);
+              // 끝점 뒤에 충분한 텍스트 포함 (마지막 문항 전체 포함)
+              const endIdx = endMatch && endMatch.index !== undefined
+                ? Math.min(pdfText.length, endMatch.index + 8000)
+                : Math.min(pdfText.length, startMatch.index + (chunkEnd - chunkStart + 1) * 3000);
 
-                chunkPdfText = pdfText.substring(startIdx, endIdx);
-              }
+              chunkPdfText = pdfText.substring(startIdx, endIdx);
+              console.log(`부분재분석: 텍스트 분할 ${pdfText.length} → ${chunkPdfText.length}자`);
+            } else {
+              // 패턴 매칭 실패 시 전체 텍스트 사용 (단, 경고 로그)
+              console.warn(`부분재분석: 문항 ${chunkStart}번 시작 패턴 찾기 실패, 전체 텍스트 사용`);
             }
 
             // 파일명에서 유형 힌트 생성
