@@ -732,14 +732,13 @@ export function MockExamParser() {
         const maxNum = Math.max(...numbers);
 
         // 예상 총 문항수 결정:
-        // - total_questions가 maxNum 이상이면 total_questions 사용 (마지막 번호가 누락된 경우 대비)
-        // - total_questions가 maxNum보다 작으면 maxNum 사용 (total_questions가 잘못된 경우)
-        // - total_questions가 maxNum보다 너무 크면 (2배 이상) maxNum 사용 (total_questions가 잘못된 경우)
+        // 1. expected_questions 우선 사용 (가장 정확함)
+        // 2. expected_questions가 없으면 total_questions 사용
+        // 3. 둘 다 maxNum보다 작거나 2배 이상이면 maxNum 사용
+        const rawExpected = item.expected_questions || item.total_questions || maxNum;
         let expectedTotal = maxNum;
-        if (item.total_questions) {
-          if (item.total_questions >= maxNum && item.total_questions < maxNum * 2) {
-            expectedTotal = item.total_questions;
-          }
+        if (rawExpected >= maxNum && rawExpected < maxNum * 2) {
+          expectedTotal = rawExpected;
         }
 
         // 빠진 문항 번호 계산: 1부터 expectedTotal까지 중 없는 번호
