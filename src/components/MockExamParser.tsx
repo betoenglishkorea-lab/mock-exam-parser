@@ -1713,6 +1713,15 @@ export function MockExamParser() {
                             )}
                             {(item.status === 'completed' || item.status === 'failed') && (
                               <>
+                                {item.status === 'failed' && (
+                                  <button
+                                    onClick={() => resumeProcessing(item)}
+                                    className="text-purple-600 hover:text-purple-800 text-sm font-medium"
+                                    disabled={processing}
+                                  >
+                                    이어서처리
+                                  </button>
+                                )}
                                 <button
                                   onClick={() => {
                                     setFilters(prev => ({ ...prev, pdfFilename: item.filename }));
