@@ -532,7 +532,7 @@ ${chunkPdfText}
                 source_grade: q.source_grade || '',
                 source_org: q.source_org || '',
                 source_number: q.source_number || null,
-                question_number: q.source_number || (chunkStart + i),
+                question_number: q.question_number || q.source_number || (chunkStart + i),
                 question_text: q.question_text || '',
                 passage: q.passage || '',
                 choice_1: q.choice_1 || '',
