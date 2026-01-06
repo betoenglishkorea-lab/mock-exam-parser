@@ -1684,7 +1684,7 @@ export function MockExamParser() {
                                 이어서처리
                               </button>
                             )}
-                            {item.status === 'completed' && (
+                            {(item.status === 'completed' || item.status === 'failed') && (
                               <>
                                 <button
                                   onClick={() => {
