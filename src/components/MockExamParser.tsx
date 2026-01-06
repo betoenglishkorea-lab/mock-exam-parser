@@ -101,8 +101,13 @@ interface MockExamQuestion {
 }
 
 export function MockExamParser() {
+  // URL 파라미터 읽기
+  const urlParams = new URLSearchParams(window.location.search);
+  const initialTab = urlParams.get('tab') === 'questions' ? 'questions' : 'exams';
+  const initialPdfFilename = urlParams.get('pdf') || '';
+
   // 메인 탭: 시험 / 문항
-  const [mainTab, setMainTab] = useState<'exams' | 'questions'>('exams');
+  const [mainTab, setMainTab] = useState<'exams' | 'questions'>(initialTab);
 
   // 시험 탭 상태
   const [queue, setQueue] = useState<PdfQueueItem[]>([]);
@@ -126,7 +131,7 @@ export function MockExamParser() {
     sourceGrade: '',
     sourceYear: '',
     sourceOrg: '',
-    pdfFilename: '',
+    pdfFilename: initialPdfFilename,
     searchText: ''
   });
 
@@ -1757,8 +1762,8 @@ export function MockExamParser() {
                                 )}
                                 <button
                                   onClick={() => {
-                                    setFilters(prev => ({ ...prev, pdfFilename: item.filename }));
-                                    setMainTab('questions');
+                                    const url = `${window.location.origin}${window.location.pathname}?tab=questions&pdf=${encodeURIComponent(item.filename)}`;
+                                    window.open(url, '_blank');
                                   }}
                                   className="text-blue-600 hover:text-blue-800 text-sm font-medium"
                                 >
