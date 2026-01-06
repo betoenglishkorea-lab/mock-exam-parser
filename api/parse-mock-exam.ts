@@ -705,7 +705,12 @@ ${chunkPdfText}
 ## 중요: 부분 추출 모드
 이 PDF에는 총 ${expectedQuestions}개의 문항이 있습니다.
 지금은 문항 번호 ${startNum}번부터 ${endNum}번까지만 추출하세요.
-다른 문항은 무시하고, 해당 범위의 문항만 정확하게 추출해주세요.`;
+다른 문항은 무시하고, 해당 범위의 문항만 정확하게 추출해주세요.
+
+**question_number 필수**: 반드시 PDF 내 순번(${startNum}~${endNum})을 question_number로 반환하세요.
+- 첫 번째 문항: question_number = ${startNum}
+- 두 번째 문항: question_number = ${startNum + 1}
+- (source_number는 원 시험지 번호로 별도 저장)`;
 
           // 스트리밍 모드로 Claude API 호출
           const apiStream = anthropic.messages.stream({
