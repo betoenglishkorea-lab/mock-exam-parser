@@ -521,14 +521,24 @@ ${chunkPdfText}
             // JSON 추출 및 파싱
             const jsonMatch = fullResponse.match(/\[[\s\S]*\]/);
             if (!jsonMatch) {
-              sendEvent('error', { message: 'JSON 형식 응답을 찾을 수 없습니다' });
+              console.error('JSON 매칭 실패. 응답 시작 부분:', fullResponse.substring(0, 500));
+              sendEvent('error', { message: 'JSON 형식 응답을 찾을 수 없습니다', success: false });
               controller.close();
               return;
             }
 
-            const questions = JSON.parse(jsonMatch[0]);
+            let questions;
+            try {
+              questions = JSON.parse(jsonMatch[0]);
+            } catch (parseError) {
+              console.error('JSON 파싱 실패:', parseError);
+              sendEvent('error', { message: `JSON 파싱 실패: ${parseError}`, success: false });
+              controller.close();
+              return;
+            }
 
             // 문항 저장
+            let savedCount = 0;
             for (let i = 0; i < questions.length; i++) {
               const q = questions[i];
               const typeInfo = findTypeMapping(q.type3 || extractedType3 || '');
@@ -555,8 +565,14 @@ ${chunkPdfText}
                 pdf_filename: filename,
               };
 
-              await supabase.from('mock_exam_questions').insert(questionData);
+              const { error: insertError } = await supabase.from('mock_exam_questions').insert(questionData);
+              if (insertError) {
+                console.error(`문항 ${i + 1} 저장 실패:`, insertError);
+              } else {
+                savedCount++;
+              }
             }
+            console.log(`부분재분석: ${questions.length}개 중 ${savedCount}개 저장 완료`);
 
             // 큐 상태 업데이트 (완료 시간 포함)
             if (queueId) {

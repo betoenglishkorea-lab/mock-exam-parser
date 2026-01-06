@@ -73,6 +73,7 @@ interface PdfQueueItem {
   extracted_years?: string;
   extracted_source?: string;
   storage_path?: string;
+  actual_questions?: number; // 실제 DB에 저장된 문항 수
 }
 
 interface MockExamQuestion {
@@ -222,7 +223,28 @@ export function MockExamParser() {
       .limit(100);
 
     if (queueData) {
-      setQueue(queueData);
+      // 각 파일별 실제 DB 문항 수 조회
+      const filenames = queueData.map(q => q.filename);
+      const { data: questionCounts } = await supabase
+        .from('mock_exam_questions')
+        .select('pdf_filename')
+        .in('pdf_filename', filenames);
+
+      // 파일별 문항 수 집계
+      const countMap: Record<string, number> = {};
+      if (questionCounts) {
+        questionCounts.forEach(q => {
+          countMap[q.pdf_filename] = (countMap[q.pdf_filename] || 0) + 1;
+        });
+      }
+
+      // 큐 데이터에 실제 문항 수 추가
+      const queueWithActualCounts = queueData.map(q => ({
+        ...q,
+        actual_questions: countMap[q.filename] || 0
+      }));
+
+      setQueue(queueWithActualCounts);
 
       const pending = queueData.filter(q => q.status === 'pending').length;
       const processingCount = queueData.filter(q => q.status === 'processing').length;
@@ -577,7 +599,8 @@ export function MockExamParser() {
 
   // 완료된 파일 재분석 (기존 문항 삭제 후 재시도)
   const reanalyzeQueueItem = async (item: PdfQueueItem) => {
-    if (!confirm(`"${item.filename}" 파일을 재분석하시겠습니까?\n\n기존에 추출된 ${item.total_questions || 0}개 문항이 삭제됩니다.`)) {
+    const actualCount = item.actual_questions ?? item.total_questions ?? 0;
+    if (!confirm(`"${item.filename}" 파일을 재분석하시겠습니까?\n\n기존에 추출된 ${actualCount}개 문항이 삭제됩니다.`)) {
       return;
     }
 
@@ -619,7 +642,7 @@ export function MockExamParser() {
       return;
     }
 
-    const totalQuestions = selectedItems.reduce((sum, item) => sum + (item.total_questions || 0), 0);
+    const totalQuestions = selectedItems.reduce((sum, item) => sum + (item.actual_questions ?? item.total_questions ?? 0), 0);
     if (!confirm(`선택된 ${selectedItems.length}개 파일을 재분석하시겠습니까?\n\n기존에 추출된 총 ${totalQuestions}개 문항이 삭제됩니다.`)) {
       return;
     }
@@ -800,6 +823,31 @@ export function MockExamParser() {
       let buffer = '';
       let completed = false;
 
+      const processLine = async (line: string) => {
+        if (line.startsWith('data: ')) {
+          try {
+            const data = JSON.parse(line.slice(6));
+            console.log('SSE 데이터:', data);
+
+            if (data.type === 'complete' || data.success === true) {
+              completed = true;
+              await fetchQueue();
+              await fetchQuestions();
+              alert(`${chunkRange.start}번 ~ ${chunkRange.end}번 문항 재분석 완료!\n${data.questionsCount || 0}개 문항이 추출되었습니다.`);
+            } else if (data.type === 'error' || data.success === false) {
+              throw new Error(data.message || '알 수 없는 오류');
+            } else if (data.type === 'progress' || data.step) {
+              console.log(`진행: ${data.message || `청크 ${data.currentChunk}/${data.totalChunks}`}`);
+            }
+          } catch (e) {
+            if (e instanceof Error && (e.message.includes('API') || e.message.includes('오류'))) {
+              throw e;
+            }
+            // JSON 파싱 실패는 무시
+          }
+        }
+      };
+
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
@@ -809,33 +857,20 @@ export function MockExamParser() {
         buffer = lines.pop() || '';
 
         for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            try {
-              const data = JSON.parse(line.slice(6));
-              console.log('SSE 데이터:', data);
-
-              if (data.type === 'complete' || data.success === true) {
-                completed = true;
-                await fetchQueue();
-                await fetchQuestions();
-                alert(`${chunkRange.start}번 ~ ${chunkRange.end}번 문항 재분석 완료!\n${data.questionsCount}개 문항이 추출되었습니다.`);
-              } else if (data.type === 'error' || data.success === false) {
-                throw new Error(data.message || '알 수 없는 오류');
-              } else if (data.type === 'progress' || data.step) {
-                console.log(`진행: ${data.message || `청크 ${data.currentChunk}/${data.totalChunks}`}`);
-              }
-            } catch (e) {
-              if (e instanceof Error && e.message.includes('API')) {
-                throw e;
-              }
-              // JSON 파싱 실패는 무시
-            }
-          }
+          await processLine(line);
         }
       }
 
+      // 스트림 종료 후 남은 버퍼 처리
+      if (buffer.trim()) {
+        await processLine(buffer);
+      }
+
       if (!completed) {
-        throw new Error('처리가 완료되지 않았습니다. 스트림이 중단되었을 수 있습니다.');
+        // 실제로 문항이 저장되었는지 확인
+        await fetchQueue();
+        await fetchQuestions();
+        console.warn('스트림 완료 이벤트를 받지 못했지만, 데이터 새로고침 완료');
       }
     } catch (error) {
       console.error('청크 재분석 오류:', error);
@@ -1722,18 +1757,18 @@ export function MockExamParser() {
                           {(item.status === 'completed' || item.status === 'warning') && (
                             <div>
                               <span className={`font-medium ${item.status === 'warning' ? 'text-orange-600' : 'text-green-600'}`}>
-                                {item.total_questions}문제
+                                {item.actual_questions ?? item.total_questions}문제
                               </span>
                               {item.expected_questions && item.expected_questions > 0 && (
                                 <span className="text-gray-400 text-xs ml-1">
-                                  /{item.expected_questions} ({item.extraction_ratio}%)
+                                  /{item.expected_questions} ({Math.round(((item.actual_questions ?? item.total_questions) / item.expected_questions) * 100)}%)
                                 </span>
                               )}
                             </div>
                           )}
                           {item.status === 'processing' && (
                             <div>
-                              <span className="text-blue-600">{item.processed_questions || 0}/{item.total_questions || '?'}</span>
+                              <span className="text-blue-600">{item.actual_questions || item.processed_questions || 0}/{item.total_questions || '?'}</span>
                               {item.started_at && (
                                 <div className="text-xs text-gray-400 mt-1">
                                   {getProcessingElapsed(item)} 경과
@@ -1742,6 +1777,22 @@ export function MockExamParser() {
                                   )}
                                 </div>
                               )}
+                            </div>
+                          )}
+                          {item.status === 'failed' && item.actual_questions !== undefined && item.actual_questions > 0 && (
+                            <div>
+                              <span className="font-medium text-orange-600">
+                                {item.actual_questions}문제
+                              </span>
+                              <span className="text-gray-400 text-xs ml-1">(일부 저장됨)</span>
+                            </div>
+                          )}
+                          {item.status === 'pending' && item.actual_questions !== undefined && item.actual_questions > 0 && (
+                            <div>
+                              <span className="font-medium text-gray-600">
+                                {item.actual_questions}문제
+                              </span>
+                              <span className="text-gray-400 text-xs ml-1">(기존)</span>
                             </div>
                           )}
                         </td>
