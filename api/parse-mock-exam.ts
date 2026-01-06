@@ -548,6 +548,27 @@ ${chunkPdfText}
               await supabase.from('mock_exam_questions').insert(questionData);
             }
 
+            // 큐 상태 업데이트 (완료 시간 포함)
+            if (queueId) {
+              // 현재 저장된 총 문항 수 조회
+              const { count } = await supabase
+                .from('mock_exam_questions')
+                .select('*', { count: 'exact', head: true })
+                .eq('pdf_filename', filename);
+
+              await supabase
+                .from('pdf_processing_queue')
+                .update({
+                  status: 'completed',
+                  total_questions: count || 0,
+                  processed_questions: count || 0,
+                  progress: 100,
+                  completed_at: new Date().toISOString(),
+                  error_message: null,
+                })
+                .eq('id', queueId);
+            }
+
             sendEvent('complete', {
               success: true,
               questionsCount: questions.length,
