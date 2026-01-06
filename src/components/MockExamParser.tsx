@@ -1114,7 +1114,10 @@ export function MockExamParser() {
     }
   };
 
-  // 문제 수정 저장
+  // 저장 상태 메시지
+  const [saveMessage, setSaveMessage] = useState<{ type: 'success' | 'error', text: string } | null>(null);
+
+  // 문제 수정 저장 (모달 유지)
   const saveQuestionEdit = async () => {
     if (!editingQuestion) return;
 
@@ -1134,13 +1137,16 @@ export function MockExamParser() {
       .eq('id', editingQuestion.id);
 
     if (error) {
-      alert(`수정 실패: ${error.message}`);
+      setSaveMessage({ type: 'error', text: `수정 실패: ${error.message}` });
     } else {
-      alert('수정이 저장되었습니다.');
-      setShowEditModal(false);
-      setEditingQuestion(null);
-      fetchQuestions();
+      setSaveMessage({ type: 'success', text: '저장되었습니다' });
+      // questions 상태도 업데이트
+      setQuestions(prev => prev.map(q => q.id === editingQuestion.id ? editingQuestion : q));
+      setFilteredQuestions(prev => prev.map(q => q.id === editingQuestion.id ? editingQuestion : q));
     }
+
+    // 3초 후 메시지 사라짐
+    setTimeout(() => setSaveMessage(null), 3000);
   };
 
   return (
@@ -1932,22 +1938,33 @@ export function MockExamParser() {
                   />
                 </div>
 
-                <div className="flex justify-end gap-3 pt-4 border-t">
-                  <button
-                    onClick={() => {
-                      setShowEditModal(false);
-                      setEditingQuestion(null);
-                    }}
-                    className="px-4 py-2 text-gray-600 hover:text-gray-800 border border-gray-300 rounded-lg"
-                  >
-                    취소
-                  </button>
-                  <button
-                    onClick={saveQuestionEdit}
-                    className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
-                  >
-                    저장
-                  </button>
+                <div className="flex justify-between items-center pt-4 border-t">
+                  {/* 저장 상태 메시지 */}
+                  <div className="flex-1">
+                    {saveMessage && (
+                      <span className={`text-sm ${saveMessage.type === 'success' ? 'text-green-600' : 'text-red-600'}`}>
+                        {saveMessage.text}
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex gap-3">
+                    <button
+                      onClick={() => {
+                        setShowEditModal(false);
+                        setEditingQuestion(null);
+                        setSaveMessage(null);
+                      }}
+                      className="px-4 py-2 text-gray-600 hover:text-gray-800 border border-gray-300 rounded-lg"
+                    >
+                      닫기
+                    </button>
+                    <button
+                      onClick={saveQuestionEdit}
+                      className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+                    >
+                      저장
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>
